@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 from .messaging import uid
 from .protocol import RpcError
+from .connections import FriendConnections
 
 LOCAL_TIME = timezone(timedelta(hours=8))
 MAX_PROACTIVE_VIDEOS = 5
@@ -68,6 +69,7 @@ class Social:
                     if bvid:
                         self.db.execute('UPDATE dm_outbox SET recommendation_bvid=? WHERE id=?', (bvid, row['id']))
         self.db.execute('CREATE INDEX IF NOT EXISTS dm_recommendation_history ON dm_outbox(account,peer,recommendation_bvid)')
+        self.connections = FriendConnections(self)
 
     def previous_recommendation(self, peer: str, bvid: str) -> sqlite3.Row | None:
         """Find the durable delivery or reservation shared by all recommendation routes."""
@@ -259,6 +261,9 @@ class Social:
             reason, next_at = 'RECOMMENDATION_QUIET_HOURS', slot.timestamp()
         elif prefs['daily_limit'] == 0 or used >= prefs['daily_limit']:
             reason, next_at = 'RECOMMENDATION_DAILY_LIMIT', (midnight + timedelta(days=1)).timestamp()
+        connection = self.connections.get(peer)
+        if connection and (not connection['enabled'] or not connection['mutual'] or connection['state'] != 'ready'):
+            reason = 'FRIEND_GREETING_PENDING' if connection['mutual'] and connection['enabled'] else 'FRIEND_NOT_MUTUAL'
         return {'used': used, 'limit': prefs['daily_limit'], 'reason': reason, 'next_at': next_at}
 
     def profile(self, peer):
@@ -268,7 +273,8 @@ class Social:
             return None
         return {**dict(row), 'interests': json.loads(row['interests']),
                 'recommend': bool(row['recommend']), 'auto_send': bool(row['auto_send']),
-                'preferences': self.preferences(peer), 'delivery': self.delivery_status(peer)}
+                'preferences': self.preferences(peer), 'delivery': self.delivery_status(peer),
+                'connection': self.connections.get(peer)}
 
     def guard_delivery(self, draft: sqlite3.Row) -> None:
         """Enforce the proactive cap inside Messaging's send lock, including manual sends."""
@@ -350,7 +356,7 @@ class Social:
         self.wake.set()
         return draft_id
 
-    def save(self, value):
+    def save(self, value, pending_connection: bool = False):
         account = self.messaging.require_account()
         if not isinstance(value, dict):
             raise RpcError(-32602, 'INVALID_FRIEND_PROFILE')
@@ -365,7 +371,7 @@ class Social:
                 or any(not isinstance(item, str) or not 1 <= len(item.strip()) <= 30 for item in interests)
                 or type(recommend) is not bool or type(auto_send) is not bool):
             raise RpcError(-32602, 'INVALID_FRIEND_PROFILE')
-        if auto_send and (not self.messaging.send_enabled or peer not in self.messaging.allowed_peers):
+        if auto_send and not pending_connection and not self.connections.get(peer) and (not self.messaging.send_enabled or peer not in self.messaging.allowed_peers):
             raise RpcError(-32040, 'CONFIGURE_DM_SEND_SCOPE_FIRST')
         if 'preferences' in value:
             self.save_preferences(peer, value['preferences'])
@@ -381,6 +387,7 @@ class Social:
         return self.profile(peer)
 
     def start(self):
+        self.connections.start()
         if self.task is None or self.task.done():
             self.task = asyncio.create_task(self.run())
 
@@ -493,6 +500,7 @@ class Social:
                 pass
 
     async def close(self):
+        await self.connections.close()
         if self.task and not self.task.done():
             self.task.cancel()
             await asyncio.gather(self.task, return_exceptions=True)

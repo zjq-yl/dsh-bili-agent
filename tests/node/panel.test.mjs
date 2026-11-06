@@ -59,7 +59,9 @@ test('panel requires local authenticated same-origin actions and never exposes a
     const health = await fetch(`${url.origin}/api/status`, { headers })
     assert.equal((await health.json()).pid, 123)
     assert.equal((await post('agent.pause')).status, 200)
-    assert.deepEqual(calls.map(call => call.method), ['worker.health', 'agent.pause'])
+    assert.equal((await post('friends.connect')).status, 200)
+    assert.equal((await post('friends.connection')).status, 200)
+    assert.deepEqual(calls.map(call => call.method), ['worker.health', 'agent.pause', 'friends.connect', 'friends.connection'])
   } finally { await panel.close(); await assert.rejects(readFile(join(dir, 'panel.json')), { code: 'ENOENT' }); await rm(dir, { recursive: true, force: true }) }
 })
 

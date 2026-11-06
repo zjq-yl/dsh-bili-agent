@@ -31,6 +31,11 @@ const panel = await startPanel({ async call(method, params) {
     return { state: item.state, assessment: item.assessment, result: { ...item, facts: [], evidence: [], analysis: { question: '示例问题', conclusion: '示例结论', reasoning: '根据测试字幕得出的示例说明', caveats: '这是合成数据，仅用于验证界面。', takeaways: '检查阅读体验' } } }
   }
   if (method === 'memory.profile') return { name: '测试角色', style: '简洁', persona: '测试人设' }
+  if (method === 'friends.connect') {
+    state.social.friends = [{ ...params.profile, peer: params.profile.peer_uid,
+      delivery: { used: 0, reason: 'FRIEND_NOT_MUTUAL' }, connection: { enabled: 1, state: 'waiting_mutual', following: 1, mutual: 0, checked: Date.now() / 1000 } }]
+  }
+  if (method === 'friends.connection' && params.action === 'pause') state.social.friends[0].connection.enabled = 0
   if (method === 'automation.configure') Object.assign(state.automation.config, params.config)
   if (!['worker.health', 'library.refresh'].includes(method)) actions.push({ method, params })
   return method === 'platform.enqueue' ? { id: 17 } : state
@@ -174,6 +179,20 @@ try {
   await evaluate("document.getElementById('tab-browse-history').click()")
   assert.equal(await evaluate("document.getElementById('browse-history').hidden"), false)
   await evaluate("document.getElementById('tab-browse-plan').click()")
+  await navigate('friends-section')
+  await evaluate("document.getElementById('new-friend').click()")
+  assert.equal(await evaluate('document.activeElement.id'), 'friend-uid')
+  assert.equal(await evaluate("document.getElementById('friend-connect').checked"), true)
+  await evaluate("document.getElementById('friend-uid').value='222'; document.getElementById('friend-name').value='测试好友'; document.getElementById('friend-interests').value='Python'; document.getElementById('friend-greeting').value='你好，测试招呼'; document.getElementById('friend-form').requestSubmit()")
+  await until("document.getElementById('friends').textContent.includes('等待回关')")
+  assert.ok(actions.some(action => action.method === 'friends.connect' && action.params.profile.peer_uid === '222' && action.params.greeting === '你好，测试招呼'))
+  await screenshot('friends-follow-desktop')
+  state.social.friends[0].connection.state = 'ready'; state.social.friends[0].connection.mutual = 1
+  await until("document.getElementById('friends').textContent.includes('招呼已发送')")
+  await evaluate("[...document.querySelectorAll('#friends button')].find(x=>x.textContent==='暂停好友流程').click()")
+  await until("document.getElementById('friends').textContent.includes('已暂停好友流程')")
+  await evaluate("[...document.querySelectorAll('#friends button')].find(x=>x.textContent==='编辑档案').click()")
+  assert.equal(await evaluate("document.getElementById('friend-connect').checked"), false, 'editing must not follow again')
   for (const width of [390, 360]) {
     await call('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: false }, sessionId)
     for (const id of ['overview', 'videos', 'automation', 'messages', 'friends-section', 'actions', 'persona', 'logs']) {
@@ -196,7 +215,7 @@ try {
   await evaluate("document.getElementById('retry-connection').click()")
   await until("document.getElementById('connection-alert').hidden")
   assert.deepEqual(errors, [], 'no uncaught JS exceptions')
-  console.log('PASS: 8 routes, 5-column / 15-item library, covers, hidden summaries, detail dialog, filters/search/pagination, keyboard tabs, enqueue, schedule preview/validation/save, live updates, reconnect, 390/360px overflow; screenshots in data/ui-checks (synthetic data).')
+  console.log('PASS: 8 routes, 5-column / 15-item library, covers, hidden summaries, detail dialog, filters/search/pagination, keyboard tabs, enqueue, schedule preview/validation/save, friend follow form and live lifecycle, pause/edit, live updates, reconnect, 390/360px overflow; screenshots in data/ui-checks (synthetic data).')
   await call('Browser.close')
 } finally {
   socket?.close()

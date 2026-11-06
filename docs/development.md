@@ -21,6 +21,8 @@ DSH
 
 控制面板静态资源在 `plugin/panel/`，`plugin/src/panel.ts` 只负责本机 HTTP、认证及转发已有 RPC；不另建 worker，不直接调用 B 站或模型。好友档案和推荐规则在 `src/bili_agent/social.py`；视频完成后唤醒处理，SQLite 经历记录作为可恢复的事件来源，发送共用私信队列、额度和去重。
 
+`connections.py` 保存面板明确请求的关注流程，独立于视频和聊天循环检查双向关系；仅调用已有 SDK 的 `User.get_relation()` 和 `modify_relation(SUBSCRIBE)`，不接入新的依赖。`friends.connect` 保存档案及一次性招呼，`friends.connection` 控制检查、关注重试和暂停／恢复；这两项仅在本地面板 RPC 暴露，不新增供模型自行找陌生人关注的工具。私信范围合并宿主允许名单与当前账号已确认互关的显式授权；实际发送在共享锁内再次检查流程状态，禁止越过招呼发送、暂停和互关条件。测试位于 `tests/python/test_connections.py`，平台适配使用模拟 SDK 验证，未把离线测试作为真实 B 站联调结果。
+
 前端浏览器验收：先运行 `node scripts/build.mjs`，再运行 `node tests/node/panel-ui-smoke.mjs`。默认使用 Windows Edge，可通过环境变量 `BILI_TEST_BROWSER` 指定 Chromium 可执行文件。测试使用临时本地服务和合成数据，封面由浏览器请求拦截提供，不访问真实账号、模型或 B 站。覆盖导航、五列视频历史、详情弹窗、搜索分页、任务入队、时间预览与保存、实时更新、断线重连和360/390px布局；截图输出到被忽略的 `data/ui-checks/`，带合成数据标记。
 
 `legacy/comment_bot/` 保留早期评论原型及独立依赖，正式插件不导入它。`dist/` 是构建输出；不要在其中修改代码。两份设计 DOCX 仍留在根目录，修订始终写回现有修订版文件。

@@ -73,6 +73,7 @@ const errors = { PANEL_AUTH_REQUIRED: '面板访问凭据失效，请重新运�
 function explain(code) { return errors[code] || code || '操作失败，请刷新后重试。' }
 Object.assign(errors, { RECOMMENDATIONS_PAUSED: '主动推荐已暂停', RECOMMENDATION_DAILY_LIMIT: '已达到该好友今日主动推荐上限', RECOMMENDATION_QUIET_HOURS: '当前不在允许推送时段', INVALID_PUSH_TIME: '请输入有效的推送时间', INVALID_RECOMMENDATION_PREFERENCES: '请检查推荐偏好、数量和时长范围', RECOMMENDATION_NOT_DELIVERED: '未找到这条视频向该对象成功发送的记录', VIDEO_NOT_ANALYZED: '这条视频还没有完成分析', VIDEO_AUTHOR_UNKNOWN: '缺少已核实的UP主信息，可在档案中手动填写屏蔽UID', VIDEO_EXCLUDED_BY_PREFERENCES: '按接收者偏好跳过该视频' })
 Object.assign(errors, { INVALID_AUTOMATION_CONFIG: '自动运行设置超出允许范围。', AUTOMATION_WINDOW_MUST_BE_SAME_DAY: '结束时间需晚于开始时间，目前支持同一天的时段。', INVALID_VIDEO_DECISION: '视频评价格式不合规，未执行动作。', DISLIKE_REQUIRES_APP_TOKEN: '缺少 App 凭据：仅在本地记为不喜欢。', FAVORITE_FOLDER_REQUIRED: '没有找到默认收藏夹，请在公开互动页选择收藏夹。', CARD_REASON_NOT_SENT: '请先发送该卡片对应的推荐理由。', RECOMMENDATION_REQUEST_LIMIT: '推荐检索请求已达到频率限制。' })
+Object.assign(errors, { FRIEND_NOT_MUTUAL: '好友流程未启用或尚未确认互关，暂不发送', FRIEND_GREETING_PENDING: '等待招呼确认发送，再分享视频', FRIEND_RELATION_BLOCKED: '存在拉黑关系，请先在 B 站核对', FOLLOW_NOT_CONFIRMED: '未确认关注成功；核对平台后可重试关注', INVALID_RELATION_RESPONSE: '平台关系数据不完整，稍后重新检查', FRIEND_CONNECTION_LIMIT: '当前最多管理 100 个关注流程', FRIEND_CONNECTION_BUSY: '正在处理关注，请稍后重试', INVALID_FRIEND_CONNECTION_ACTION: '未找到对应的好友流程', DM_CSRF_REQUIRED: '账号凭据缺少 bili_jct，暂时无法发送私信' })
 function validationDetail(detail) {
   if (!detail) return ''
   const reasons = { invalid_json: '不是有效的 JSON', object_required: '需要 JSON 对象', string_required: '需要文本', array_required: '需要列表', length: '字符数不符合限制', count: '条数不符合限制', integer_ids_required: '证据 ID 必须是整数', unknown_ids: '引用了本轮不存在的证据 ID', invalid_reflection: '视频感受的分类、长度、评分或证据不合规' }
@@ -368,6 +369,23 @@ function renderFriends(social) {
     const card = document.createElement('article'); card.className = 'draft'
     const top = document.createElement('div'); top.className = 'draft-top'
     top.append(text('strong', `${friend.name} · ${friend.category}`), text('span', `UID ${friend.peer}`)); card.append(top)
+    const connection = friend.connection
+    if (connection) {
+      const states = { pending: '等待关注', following: '正在关注', waiting_mutual: '已关注 · 等待回关', greeting: '已互关 · 招呼待发送', ready: '招呼已发送 · 可以分享', blocked: '需要处理', uncertain: '招呼待核对 · 不重复发送' }
+      const status = text('div', '', 'friend-connection')
+      status.append(badge(!connection.enabled ? '已暂停好友流程' : connection.state === 'ready' && !connection.mutual ? '等待重新确认互关' : states[connection.state] || connection.state))
+      if (connection.checked) status.append(text('small', `最近检查 ${new Date(connection.checked * 1000).toLocaleTimeString()}`, 'subtle'))
+      if (connection.error) status.append(text('p', explain(connection.error), 'hint'))
+      status.append(button('检查互关', async () => {
+        await call('friends.connection', { peer_uid: friend.peer, action: 'check' }); notice('已安排检查，状态会自动更新。')
+      }), button(connection.enabled ? '暂停好友流程' : '恢复好友流程', async () => {
+        await call('friends.connection', { peer_uid: friend.peer, action: connection.enabled ? 'pause' : 'resume' }); notice(connection.enabled ? '已暂停该对象的流程与发送；B 站关注关系保持不变。' : '已恢复关系检查，将先核实互关状态。')
+      }))
+      if (connection.enabled && connection.state === 'blocked' && !connection.following) status.append(button('重试关注', async () => {
+        await call('friends.connection', { peer_uid: friend.peer, action: 'retry' }); notice('已安排重试；先检查平台关系，已关注时不重复操作。')
+      }))
+      card.append(status)
+    } else card.append(text('p', '本地档案 · 尚未启用 B 站关注流程', 'subtle'))
     const tags = document.createElement('div'); tags.className = 'friend-interests'
     for (const interest of friend.interests) tags.append(badge(interest)); card.append(tags)
     card.append(text('p', friend.style || '尚未填写表达偏好', 'subtle'))
@@ -386,10 +404,11 @@ function renderFriends(social) {
       $('friend-uid').value = friend.peer; $('friend-name').value = friend.name; $('friend-category').value = friend.category
       $('friend-interests').value = friend.interests.join('，'); $('friend-style').value = friend.style
       $('friend-recommend').checked = friend.recommend; $('friend-auto').checked = friend.auto_send; $('friend-uid').focus()
+      $('friend-connect').checked = false; $('friend-greeting').value = ''; updateFriendForm()
       fillPreferences(prefs)
     })); return card
   }))
-  if (!social?.friends?.length) $('friends').append(text('p', '先验证机器人账号，再添加好友的数字 UID 和兴趣。', 'empty'))
+  if (!social?.friends?.length) $('friends').append(text('p', '点击“添加好友”，填写 UID、昵称和兴趣，开始关注与互关确认。', 'empty'))
   $('recommendation-status').textContent = social?.error ? `推荐处理：${explain(social.error)}` : `最近 ${social?.recommendations?.length || 0} 条推荐记录，可在“最近回复”查看草稿和发送状态。`
   const feedbackNames = { like: '喜欢', too_basic: '太基础', too_hard: '太难', too_long: '太长', not_interested: '不感兴趣', seen: '看过了', block_author: '不再推荐这个UP' }
   $('feedback-history').replaceChildren(...(social?.feedback || []).map(item => text('p', `UID ${item.peer} · ${item.bvid} · ${feedbackNames[item.kind] || item.kind} · ${new Date(item.created * 1000).toLocaleString()}`, 'subtle')))
@@ -473,12 +492,22 @@ form('profile-form', async () => {
     persona: $('profile-persona').value.trim(), preferred_keywords: keywords('profile-preferred'), avoided_keywords: keywords('profile-avoided') } })
   notice('人设和选片偏好已保存，下一次生成时生效。已有草稿和发送权限不变。')
 })
+function updateFriendForm() {
+  $('friend-greeting-field').hidden = !$('friend-connect').checked
+  $('save-friend').textContent = $('friend-connect').checked ? '保存并关注' : '保存好友档案'
+}
+$('friend-connect').onchange = updateFriendForm
+$('new-friend').onclick = () => {
+  $('friend-form').reset(); fillPreferences(); updateFriendForm()
+  $('friend-editor').open = true; $('friend-uid').focus()
+}
 form('friend-form', async () => {
-  await call('friends.save', { profile: { peer_uid: $('friend-uid').value.trim(), name: $('friend-name').value.trim(),
+  const connect = $('friend-connect').checked
+  await call(connect ? 'friends.connect' : 'friends.save', { profile: { peer_uid: $('friend-uid').value.trim(), name: $('friend-name').value.trim(),
     category: $('friend-category').value.trim(), interests: $('friend-interests').value.split(/[,，]/).map(s => s.trim()).filter(Boolean),
     style: $('friend-style').value.trim(), recommend: $('friend-recommend').checked, auto_send: $('friend-auto').checked,
-    preferences: readPreferences() } })
-  notice('好友档案已保存，将用于之后的私信回复和新视频推荐。')
+    preferences: readPreferences() }, ...(connect ? { greeting: $('friend-greeting').value.trim() } : {}) })
+  notice(connect ? '已保存关注请求。确认互关后发送一次招呼，再按设置分享；可在好友卡片查看实时进度。' : '好友档案已保存，将用于之后的私信回复和新视频推荐。')
 })
 form('feedback-form', async () => {
   await call('friends.feedback', { peer_uid: $('feedback-peer').value.trim(), bvid: $('feedback-bvid').value.trim(), kind: $('feedback-kind').value })
@@ -572,6 +601,7 @@ function renderAutomation(auto) {
         $('friend-interests').value = job.keyword; $('friend-recommend').checked = true
         fillPreferences(job.requirements || {})
         $('friend-auto').checked = !!current?.messaging?.send_enabled && current.messaging.allowed_peers.includes(job.peer)
+        $('friend-connect').checked = false; $('friend-greeting').value = ''; updateFriendForm()
         navigate('friends-section'); $('friend-editor').open = true; $('friend-uid').focus(); notice('已填入请求对象和兴趣，确认后点击“保存好友”启用后续主动推荐。')
       }))
     }

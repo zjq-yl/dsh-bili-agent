@@ -13,6 +13,32 @@ from bili_agent.protocol import RpcError
 
 
 class PlatformTests(unittest.IsolatedAsyncioTestCase):
+    async def test_relation_normalizes_both_directions_and_follow_uses_sdk_once(self):
+        relation = AsyncMock()
+        modify = AsyncMock(return_value={})
+        target = SimpleNamespace(get_relation=relation, modify_relation=modify)
+        user = SimpleNamespace(User=Mock(return_value=target), RelationType=SimpleNamespace(SUBSCRIBE=1))
+        settings = SimpleNamespace(get_wbi_retry_times=Mock(return_value=3), set_wbi_retry_times=Mock())
+        with tempfile.TemporaryDirectory() as directory, patch.dict(sys.modules, {
+                'bilibili_api': SimpleNamespace(user=user), 'bilibili_api.utils': SimpleNamespace(),
+                'bilibili_api.utils.network': SimpleNamespace(request_settings=settings)}):
+            platform = Platform(Path(directory))
+            platform.credential = lambda: 'test-credential'
+            for own, other, expected in [(0, 0, False), (2, 0, False), (0, 2, False), (6, 6, True), (2, 2, True), (128, 6, False)]:
+                relation.return_value = {'relation': {'attribute': own}, 'be_relation': {'attribute': other}}
+                self.assertEqual((await platform.relation({'peer_uid': '22'}))['mutual'], expected)
+            for invalid in ({}, {'relation': {'attribute': 6}}, {'relation': {'attribute': True}, 'be_relation': {'attribute': 6}}):
+                relation.return_value = invalid
+                with self.assertRaisesRegex(RpcError, 'INVALID_RELATION_RESPONSE'):
+                    await platform.relation({'peer_uid': '22'})
+            await platform.follow({'peer_uid': '22'})
+            modify.assert_awaited_once_with(1)
+            user.User.assert_called_with(22, credential='test-credential')
+            self.assertEqual([call.args[0] for call in settings.set_wbi_retry_times.call_args_list], [1, 3])
+            for peer in ('', '0', '-1', '22;anything', 22):
+                with self.assertRaisesRegex(RpcError, 'INVALID_UID'):
+                    await platform.follow({'peer_uid': peer})
+
     async def test_popular_feed_uses_sdk_and_normalizes_candidates(self):
         hot = SimpleNamespace(get_hot_videos=AsyncMock(return_value={'list': [
             {'bvid': 'BV17x411w7KC', 'title': '热门视频', 'duration': 100, 'owner': {'mid': 123, 'name': 'UP'}},

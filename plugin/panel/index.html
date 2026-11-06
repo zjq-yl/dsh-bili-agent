@@ -96,17 +96,18 @@
 
     </section>
     <section id="friends-section" class="card" hidden>
-      <div class="section-heading"><div><h2>好友列表</h2></div></div>
-      <p class="hint">按好友兴趣推荐值得看的视频，附理由、摘要和链接。同一视频不重复推荐。</p>
+      <div class="section-heading"><div><h2>好友列表</h2></div><button id="new-friend" type="button" class="primary">＋ 添加好友</button></div>
+      <p class="hint">添加指定 UID → B 站关注 → 等待对方回关 → 发送一次招呼 → 按兴趣分享。B 站关注无需审批，这里的确认以互相关注为准。</p>
       <div id="friends" class="drafts"><p class="empty">尚未添加好友档案</p></div>
       <details id="friend-editor" class="editor-panel"><summary>添加 / 编辑好友</summary>
       <form id="friend-form">
+        <div class="friend-connect-settings"><label class="check"><input id="friend-connect" type="checkbox" checked>关注这个 B 站账号，并在互关后打招呼</label><p class="subtle">仅授权你填写的 UID；确认互关后纳入该账号的私信范围。私信总开关仍需在 DSH 开启。取消勾选则只保存本地档案。</p><label id="friend-greeting-field">首次招呼（留空使用角色名生成简短招呼）<textarea id="friend-greeting" rows="2" maxlength="800" placeholder="例如：你好呀，很高兴认识你！以后看到适合你的内容会分享给你。"></textarea></label></div>
         <div class="persona-grid"><div><label>好友 UID<input id="friend-uid" inputmode="numeric" pattern="[1-9][0-9]{0,29}" placeholder="数字 UID，不是昵称" required></label><label>好友昵称<input id="friend-name" maxlength="50" placeholder="例如：艺黎7" required></label><label>分类<input id="friend-category" value="好友" maxlength="30" required></label></div><div><label>兴趣关键词（逗号分隔）<input id="friend-interests" placeholder="例如：编程，Python，科技" required></label><label>性格与表达偏好<textarea id="friend-style" rows="3" maxlength="500" placeholder="例如：喜欢简短直接的回复，遇到技术内容可以多讲细节"></textarea></label></div></div>
         <div class="setting-grid">
           <fieldset><legend>推荐偏好</legend><label>长期推荐模式<select id="friend-mode"><option value="learning">学习：基础、目标与内容依据</option><option value="leisure">休闲：兴趣与观看负担</option></select></label><label>已有水平<input id="friend-level" maxlength="100" placeholder="例如：会变量和循环，刚开始学函数"></label><label>学习目标<textarea id="friend-goal" maxlength="500" rows="3" placeholder="例如：学会用 Python 整理 Excel 表格"></textarea></label><label>偏好最长视频秒数（0 表示不额外限制）<input id="friend-max-seconds" type="number" min="0" max="21600" value="0" required></label></fieldset>
           <fieldset><legend>推送设置</legend><label>每天最多主动推荐几个视频<input id="friend-daily-limit" type="number" min="0" max="5" value="5" required></label><div class="time-fields"><label>允许推送开始<input id="friend-push-start" type="time" value="09:00" required></label><label>允许推送结束<input id="friend-push-end" type="time" value="22:00" required></label></div><p class="subtle">北京时间；支持跨午夜，开始与结束相同表示全天。每日数量在北京时间零点重置。点播回复单独处理。</p><label>避开关键词<input id="friend-blocked-keywords" placeholder="逗号分隔，最多30项"></label><label>不再推荐的 UP 主 UID 或名称<input id="friend-blocked-authors" placeholder="优先填写数字UID，逗号分隔"></label></fieldset>
         </div>
-        <div class="controls"><label class="check"><input id="friend-recommend" type="checkbox" checked> 为这位好友生成推荐</label><label class="check"><input id="friend-auto" type="checkbox"> 自动发送推荐（需发送权限）</label><button class="primary" type="submit">保存好友</button></div>
+        <div class="controls"><label class="check"><input id="friend-recommend" type="checkbox" checked> 为这位好友生成推荐</label><label class="check"><input id="friend-auto" type="checkbox" checked> 自动分享匹配的视频</label><button id="save-friend" class="primary" type="submit">保存并关注</button></div>
       </form></details>
       <p id="recommendation-status" class="subtle"></p>
       <details id="feedback-editor" class="editor-panel"><summary>推荐反馈</summary>

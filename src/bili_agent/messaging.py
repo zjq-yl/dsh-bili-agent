@@ -68,7 +68,7 @@ class Messaging:
         self.activities = {}
         self.scope_logged = set()
         self.send_enabled = bool(send_enabled)
-        self.allowed_peers = {uid(value) for value in allowed_peers}
+        self.configured_peers = {uid(value) for value in allowed_peers}
         self.send_lock = asyncio.Lock()
         self.task = None
         self.auto_send = False
@@ -113,6 +113,11 @@ class Messaging:
             self.db.execute('ALTER TABLE dm_messages ADD COLUMN accepted INTEGER NOT NULL DEFAULT 0')
         row = self.db.execute('SELECT uid FROM account_binding WHERE id=1').fetchone()
         self.account = row[0] if row else None
+
+    @property
+    def allowed_peers(self) -> set[str]:
+        """Combine host scope with explicit account-scoped panel friend authorizations."""
+        return self.configured_peers | (self.friends.connections.allowed_peers() if self.friends else set())
 
     def require_account(self):
         if not self.account:
@@ -418,6 +423,8 @@ class Messaging:
                     raise RpcError(-32040, 'CARD_REASON_NOT_SENT')
             if row['peer'] not in self.allowed_peers:
                 raise RpcError(-32040, 'RECIPIENT_NOT_ENABLED')
+            if self.friends:
+                self.friends.connections.guard(row)
             if not identity.get('can_send_dm'):
                 raise RpcError(-32040, 'DM_CSRF_REQUIRED')
             now = time.time()

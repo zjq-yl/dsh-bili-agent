@@ -68,7 +68,7 @@ class Platform:
 
     async def request(self, operation, params):
         # Private messaging must not wait for a slow video fetch. All starts still share a rate gate.
-        lane = self.dm_lock if operation in ('identity', 'sessions', 'messages', 'send_dm', 'share_video', 'video_action', 'send_comment') else self.lock
+        lane = self.dm_lock if operation in ('identity', 'sessions', 'messages', 'send_dm', 'share_video', 'video_action', 'send_comment', 'relation', 'follow') else self.lock
         async with lane:
             async with self.rate_lock:
                 delay = self.next_request - time.monotonic()
@@ -80,7 +80,8 @@ class Platform:
                     handlers = {"search": self.search, "popular": self.popular, "fetch": self.fetch, "audio": self.audio, 'metadata': self.metadata,
                                 "identity": self.identity, "sessions": self.sessions, "messages": self.messages,
                                 "send_dm": self.send_dm, "share_video": self.share_video, 'send_comment': self.send_comment,
-                                "video_action": self.video_action, "favorite_folders": self.favorite_folders}
+                                "video_action": self.video_action, "favorite_folders": self.favorite_folders,
+                                'relation': self.relation, 'follow': self.follow}
                     if operation not in handlers:
                         raise RpcError(-32601, "UNKNOWN_PLATFORM_OPERATION")
                     result = await handlers[operation](params)
@@ -118,6 +119,42 @@ class Platform:
     async def sessions(self, params):
         from bilibili_api import session
         return await session.get_sessions(credential=self.credential(), session_type=1)
+
+    def relation_user(self, params: dict):
+        """Construct the SDK user only for an explicit numeric target."""
+        from bilibili_api import user
+        peer = params.get('peer_uid')
+        if not isinstance(peer, str) or not re.fullmatch(r'[1-9][0-9]{0,29}', peer):
+            raise RpcError(-32602, 'INVALID_UID')
+        return user.User(int(peer), credential=self.credential())
+
+    async def relation(self, params: dict) -> dict:
+        """Read both directions; unknown relation payloads never imply mutual following."""
+        data = await self.relation_user(params).get_relation()
+        if not isinstance(data, dict):
+            raise RpcError(-32010, 'INVALID_RELATION_RESPONSE')
+        own, other = data.get('relation'), data.get('be_relation')
+        if (not isinstance(own, dict) or not isinstance(other, dict)
+                or type(own.get('attribute')) is not int or type(other.get('attribute')) is not int
+                or own['attribute'] not in (0, 1, 2, 6, 128) or other['attribute'] not in (0, 1, 2, 6, 128)):
+            raise RpcError(-32010, 'INVALID_RELATION_RESPONSE')
+        following, followed_by = own['attribute'] in (2, 6), other['attribute'] in (2, 6)
+        blocked = own['attribute'] == 128 or other['attribute'] == 128
+        return {'following': following, 'followed_by': followed_by,
+                'mutual': following and followed_by and not blocked, 'blocked': blocked}
+
+    async def follow(self, params: dict) -> dict:
+        """Issue one follow request; the workflow verifies the relation separately."""
+        from bilibili_api import user
+        from bilibili_api.utils.network import request_settings
+        target = self.relation_user(params)
+        previous = request_settings.get_wbi_retry_times()
+        request_settings.set_wbi_retry_times(1)
+        try:
+            await target.modify_relation(user.RelationType.SUBSCRIBE)
+            return {'requested': True}
+        finally:
+            request_settings.set_wbi_retry_times(previous)
 
     async def messages(self, params):
         from bilibili_api import session

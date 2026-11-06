@@ -12,7 +12,7 @@ const methods = new Set([
   'memory.profile', 'memory.configure', 'memory.recall',
   'dm.account', 'dm.status', 'dm.sync', 'dm.history', 'dm.reply', 'dm.compose', 'dm.send',
   'dm.start', 'dm.stop', 'dm.memory', 'dm.summarize',
-  'friends.status', 'friends.save', 'friends.preferences', 'friends.feedback',
+  'friends.status', 'friends.save', 'friends.preferences', 'friends.feedback', 'friends.connect', 'friends.connection',
   'automation.status', 'automation.configure', 'automation.folders', 'automation.retry_review',
 ])
 const usesModel = new Set(['model.check', 'agent.start', 'dm.reply', 'dm.start', 'dm.summarize', 'automation.retry_review'])

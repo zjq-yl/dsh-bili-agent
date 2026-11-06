@@ -97,6 +97,10 @@ class Runtime:
             return self.social.status()
         if method == 'friends.save':
             return self.social.save(params.get('profile'))
+        if method == 'friends.connect':
+            return await self.social.connections.connect(params.get('profile'), params.get('greeting', ''))
+        if method == 'friends.connection':
+            return self.social.connections.control(params.get('peer_uid'), params.get('action'))
         if method == 'friends.preferences':
             if params.get('pause_today') is True:
                 peer = uid(params.get('peer_uid'))
