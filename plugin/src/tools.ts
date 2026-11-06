@@ -167,15 +167,21 @@ export function registerTools(
     },
   }))
   ctx.tools.register(defineTool({
-    name: 'bili_agent_friends', description: '查看或设置好友兴趣、学习/休闲偏好与推送节奏，记录对已送达视频的明确反馈。仅按用户要求修改，不能凭推测更改水平或扩大发送权限。',
+    name: 'bili_agent_friends', description: '查看 B 站互关好友、粉丝和关注列表，按 UID 核实关系，或设置本地推荐偏好。给指定对象发送前先 lookup；未互关时发送入口保留消息并先添加，确认互关后才发送。不因读取粉丝列表自动回关或群发。',
     parameters: {
-      action: { type: 'string', required: true, description: 'status/save/preferences/feedback' },
+      action: { type: 'string', required: true, description: 'status/directory/lookup/save/preferences/feedback' },
+      kind: { type: 'string', description: 'directory：mutual互关好友、followers单向粉丝、following单向关注' },
+      page: { type: 'number', description: 'directory平台列表页码，从1开始；粉丝列表可能受平台上限限制' },
+      peer_uid: { type: 'string', description: 'lookup：目标数字UID，直接核实双向关注关系' },
       profile_json: { type: 'string', description: 'save：peer_uid、name、interests、category、style、recommend、auto_send，可带preferences。preferences动作：{peer_uid,preferences:{mode:learning或leisure,level,goal,max_seconds,daily_limit,push_start,push_end,paused_until,blocked_keywords,blocked_authors}}，省略字段保留。feedback动作：{peer_uid,bvid,kind}，kind为like/too_basic/too_hard/too_long/not_interested/seen/block_author。' },
     },
     output: textOutput,
     async execute(args, exec: ExecutionContext) {
       const startupError = await startup
       if (startupError) return JSON.stringify({ error: startupError })
+      if (['directory', 'lookup'].includes(args.action)) return JSON.stringify(await bridge.call(`friends.${args.action}`, {
+        kind: args.kind || 'mutual', page: args.page ?? 1, peer_uid: args.peer_uid,
+      }, { signal: exec.signal }))
       if (!['status', 'save', 'preferences', 'feedback'].includes(args.action)) return JSON.stringify({ error: 'INVALID_ACTION' })
       const value = args.action === 'status' ? {} : JSON.parse(args.profile_json || '{}')
       const params = args.action === 'save' ? { profile: value } : value
@@ -199,7 +205,7 @@ export function registerTools(
     },
   }))
   ctx.tools.register(defineTool({
-    name: 'bili_agent_dm', description: '管理当前账号的一对一文本私信：读取、草稿、发送、对话总结与隔离记忆。发送受插件配置的开关和收件人范围控制。',
+    name: 'bili_agent_dm', description: '管理当前账号的一对一文本私信：读取、草稿、发送、对话总结与隔离记忆。给指定对象发送前用好友工具 lookup 检索关系；发送入口再次核实，未互关则保留正文并先添加，待互关与招呼成功后续发。只有返回 sent 才能声称发送成功；发送受总开关、好友暂停及间隔控制。',
     parameters: {
       action: { type: 'string', required: true, description: 'account/status/sync/history/reply/compose/send/summarize/memory/forget/start/stop' },
       peer_uid: { type: 'string', description: '对方UID，使用字符串；history/compose/summarize/memory/forget必填，sync可选' },

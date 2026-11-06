@@ -13,6 +13,38 @@ from bili_agent.protocol import RpcError
 
 
 class PlatformTests(unittest.IsolatedAsyncioTestCase):
+    async def test_contact_lists_classification_pagination_and_invalid_payload(self):
+        mutual = AsyncMock(return_value={'list': [{'mid': n, 'uname': f'好友{n}', 'attribute': 6} for n in range(100, 151)]})
+        followers = AsyncMock(return_value={'list': [
+            {'mid': 22, 'attribute': 2}, {'mid': 33, 'attribute': 6}, {'mid': 44, 'attribute': 128}], 'total': 1500})
+        following = AsyncMock(return_value={'list': [{'mid': 55, 'attribute': 2}], 'total': 1})
+        user = SimpleNamespace(get_self_friends=mutual, User=Mock(return_value=SimpleNamespace(
+            get_followers=followers, get_followings=following)))
+        with tempfile.TemporaryDirectory() as directory, patch.dict(sys.modules, {'bilibili_api': SimpleNamespace(user=user)}):
+            platform = Platform(Path(directory))
+            platform.credential = lambda: 'test'
+            params = {'account_uid': '77'}
+            first = await platform.contacts(params)
+            self.assertEqual(len(first['items']), 50)
+            self.assertTrue(first['has_more'])
+            last = await platform.contacts({**params, 'page': 2})
+            self.assertEqual([item['peer'] for item in last['items']], ['150'])
+            self.assertFalse(last['has_more'])
+            fans = await platform.contacts({**params, 'kind': 'followers', 'page': 20})
+            self.assertEqual([item['peer'] for item in fans['items']], ['22'])
+            self.assertTrue(fans['limited'])
+            self.assertFalse(fans['has_more'])
+            followers.assert_awaited_once_with(pn=20, ps=50)
+            own = await platform.contacts({**params, 'kind': 'following'})
+            self.assertEqual(own['items'][0]['peer'], '55')
+            following.assert_awaited_once_with(pn=1, ps=50)
+            for invalid in ({'kind': 'invalid'}, {'page': True}, {'page': 0}, {'account_uid': 'bad'}):
+                with self.assertRaisesRegex(RpcError, 'INVALID_CONTACT_PAGE'):
+                    await platform.contacts({**params, **invalid})
+            mutual.return_value = {'list': [{'mid': 22, 'attribute': 2}]}
+            with self.assertRaisesRegex(RpcError, 'INVALID_RELATION_RESPONSE'):
+                await platform.contacts(params)
+
     async def test_relation_normalizes_both_directions_and_follow_uses_sdk_once(self):
         relation = AsyncMock()
         modify = AsyncMock(return_value={})

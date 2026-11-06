@@ -137,6 +137,7 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.social.delivery_status('22')['used'], 5)
         self.assertIsNone(self.dm.delivery_window()['limit'])
         restarted = Social(self.store, self.dm)
+        await restarted.connections.tick()  # A restart requires fresh mutual confirmation.
         self.assertEqual(restarted.delivery_status('22')['reason'], 'RECOMMENDATION_DAILY_LIMIT')
         with self.assertRaisesRegex(RpcError, 'INVALID_RECOMMENDATION_PREFERENCES'):
             self.social.save_preferences('22', {'daily_limit': 6})

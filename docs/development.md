@@ -21,7 +21,9 @@ DSH
 
 控制面板静态资源在 `plugin/panel/`，`plugin/src/panel.ts` 只负责本机 HTTP、认证及转发已有 RPC；不另建 worker，不直接调用 B 站或模型。好友档案和推荐规则在 `src/bili_agent/social.py`；视频完成后唤醒处理，SQLite 经历记录作为可恢复的事件来源，发送共用私信队列、额度和去重。
 
-`connections.py` 保存面板明确请求的关注流程，独立于视频和聊天循环检查双向关系；仅调用已有 SDK 的 `User.get_relation()` 和 `modify_relation(SUBSCRIBE)`，不接入新的依赖。`friends.connect` 保存档案及一次性招呼，`friends.connection` 控制检查、关注重试和暂停／恢复；这两项仅在本地面板 RPC 暴露，不新增供模型自行找陌生人关注的工具。私信范围合并宿主允许名单与当前账号已确认互关的显式授权；实际发送在共享锁内再次检查流程状态，禁止越过招呼发送、暂停和互关条件。测试位于 `tests/python/test_connections.py`，平台适配使用模拟 SDK 验证，未把离线测试作为真实 B 站联调结果。
+`connections.py` 保存明确选定对象的关注流程，独立于视频和聊天循环检查双向关系。平台层复用现有 SDK 的 `get_self_friends()`、`User.get_followers/get_followings/get_relation()` 与 `modify_relation(SUBSCRIBE)`。`friends.directory/lookup` 只读真实关系列表或指定 UID，不创建档案或授予发送权限；`friends.contact` 明确回关或保存拒绝回关选择；`friends.message` 复用私信草稿与幂等发送；`friends.connect/connection` 管理指定对象添加与暂停／重试。模型的好友工具只增加只读 directory/lookup，实际发送仍走原 DM 工具。
+
+私信共享发送锁内调用 `prepare_send`：既有互关好友建立 `greet_required=0` 的授权记录，无需补发招呼；未互关的目标保留草稿并启动添加流程，新好友先完成一次性招呼再发送被选中的正文。仅带 `FRIEND_ADD_REQUIRED/FRIEND_GREETING_PENDING` 标记的草稿由好友循环续发，普通未选择发送的草稿不受影响。持久授权按账号隔离；暂停、明确不回关和不确定回执不会被自动覆盖。测试位于 `tests/python/test_connections.py`，平台适配使用模拟 SDK 验证，未把离线测试作为真实 B 站联调结果。
 
 前端浏览器验收：先运行 `node scripts/build.mjs`，再运行 `node tests/node/panel-ui-smoke.mjs`。默认使用 Windows Edge，可通过环境变量 `BILI_TEST_BROWSER` 指定 Chromium 可执行文件。测试使用临时本地服务和合成数据，封面由浏览器请求拦截提供，不访问真实账号、模型或 B 站。覆盖导航、五列视频历史、详情弹窗、搜索分页、任务入队、时间预览与保存、实时更新、断线重连和360/390px布局；截图输出到被忽略的 `data/ui-checks/`，带合成数据标记。
 

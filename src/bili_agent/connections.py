@@ -7,7 +7,7 @@ from .protocol import RpcError
 
 
 class FriendConnections:
-    """Advance only panel-authorized recipients; never discover new follow targets."""
+    """Advance only selected recipients; directory reads never initiate follows."""
 
     def __init__(self, social):
         self.social, self.dm, self.db = social, social.messaging, social.db
@@ -21,6 +21,9 @@ class FriendConnections:
             greeting TEXT NOT NULL, greeting_id TEXT, checked REAL NOT NULL DEFAULT 0,
             next_check REAL NOT NULL DEFAULT 0, error TEXT, created REAL NOT NULL,
             PRIMARY KEY(account,peer));''')
+        if 'greet_required' not in {row[1] for row in self.db.execute('PRAGMA table_info(friend_connections)')}:
+            with self.db:
+                self.db.execute('ALTER TABLE friend_connections ADD COLUMN greet_required INTEGER NOT NULL DEFAULT 1')
         with self.db:
             self.db.execute('UPDATE friend_connections SET mutual=0,next_check=0 WHERE enabled=1')
 
@@ -28,6 +31,120 @@ class FriendConnections:
         row = self.db.execute('SELECT * FROM friend_connections WHERE account=? AND peer=?',
                               (self.dm.account, peer)).fetchone()
         return dict(row) if row else None
+
+    async def directory(self, kind: str = 'mutual', page: int = 1) -> dict:
+        """List real platform contacts without granting permission or starting follow requests."""
+        await self.dm.bind()
+        result = await self.dm.platform.request('contacts', {'kind': kind, 'page': page, 'account_uid': self.dm.account})
+        return {**result, 'checked': time.time(), 'items': [{**item, 'connection': self.get(item['peer']),
+                'has_profile': self.social.profile(item['peer']) is not None} for item in result['items']]}
+
+    async def lookup(self, peer: str) -> dict:
+        """Check one UID directly; absence from a paginated list never proves absence of friendship."""
+        peer = uid(peer)
+        await self.dm.bind()
+        if peer == self.dm.account:
+            raise RpcError(-32602, 'INVALID_DM_CONTENT_OR_RECIPIENT')
+        relation = await self.dm.platform.request('relation', {'peer_uid': peer})
+        return {'peer': peer, **relation, 'kind': 'blocked' if relation['blocked'] else 'mutual' if relation['mutual']
+                else 'following' if relation['following'] else 'followers' if relation['followed_by'] else 'stranger',
+                'connection': self.get(peer), 'checked': time.time()}
+
+    def register(self, peer: str, name: str = '', greet: bool = True) -> None:
+        """Create a selected recipient only, without inventing interests or enabling recommendations."""
+        if not self.social.profile(peer):
+            self.social.save({'peer_uid': peer, 'name': name or peer, 'interests': [],
+                              'recommend': False, 'auto_send': False}, pending_connection=True)
+        greeting = f"你好呀，我是{self.dm.memory.profile()['name']}。很高兴认识你！"
+        with self.db:
+            self.db.execute('''INSERT OR IGNORE INTO friend_connections(account,peer,greeting,greet_required,created)
+                VALUES(?,?,?,?,?)''', (self.dm.account, peer, greeting, int(greet), time.time()))
+
+    async def contact(self, peer: str, action: str, name: str = '') -> dict:
+        """Explicitly follow back or remember a decision not to follow; listing alone does neither."""
+        if action not in ('follow_back', 'decline') or not isinstance(name, str) or len(name) > 50:
+            raise RpcError(-32602, 'INVALID_FRIEND_CONNECTION_ACTION')
+        found = await self.lookup(peer)
+        peer = found['peer']
+        if found['blocked'] or not found['followed_by']:
+            raise RpcError(-32040, 'CONTACT_NOT_FOLLOWER')
+        if found['mutual']:
+            return found  # Already a friend: do not create another greeting.
+        self.register(peer, name)
+        self.update(peer, enabled=int(action == 'follow_back'), state='pending' if action == 'follow_back' else 'declined',
+                    following=int(found['following']), mutual=0, checked=time.time(), next_check=0, error=None,
+                    follow_attempted=0)
+        self.dm.store.event('friend', '已选择回关，确认互关后打招呼' if action == 'follow_back' else '已选择不回关，不自动添加或私信', peer)
+        self.wake.set()
+        return self.social.profile(peer)
+
+    async def prepare_send(self, draft) -> bool:
+        """Resolve real friendship before every send, queueing the selected message behind an add if needed."""
+        peer = draft['peer']
+        row = self.get(peer)
+        if row and not row['enabled']:
+            raise RpcError(-32040, 'FRIEND_CONNECTION_PAUSED')
+        # A recent negative check may be reused while the dedicated workflow waits for a follow-back.
+        if row and row['state'] not in ('ready', 'greeting') and time.time() - row['checked'] < 60:
+            if row['state'] == 'uncertain':
+                raise RpcError(-32040, 'DM_SEND_UNCERTAIN')
+            self.defer(draft['id'], 'FRIEND_ADD_REQUIRED')
+            return False
+        found = await self.lookup(peer)
+        row = self.get(peer)  # A pause may arrive while the platform lookup is in flight.
+        if row and not row['enabled']:
+            raise RpcError(-32040, 'FRIEND_CONNECTION_PAUSED')
+        if found['blocked']:
+            if row:
+                self.update(peer, mutual=0)
+            raise RpcError(-32040, 'FRIEND_RELATION_BLOCKED')
+        if not row:
+            self.register(peer, greet=not found['mutual'])
+            row = self.get(peer)
+        self.update(peer, following=int(found['following']), mutual=int(found['mutual']), checked=time.time())
+        if found['following']:
+            self.update(peer, follow_attempted=1)
+        if not found['mutual']:
+            self.state(peer, 'waiting_mutual' if found['following'] else 'pending')
+            self.defer(draft['id'], 'FRIEND_ADD_REQUIRED')
+            self.wake.set()
+            return False
+        if not row['greet_required']:
+            self.state(peer, 'ready')
+        elif row['state'] != 'ready' and row['greeting_id'] != draft['id']:
+            self.defer(draft['id'], 'FRIEND_GREETING_PENDING')
+            self.update(peer, next_check=0)
+            self.wake.set()
+            return False
+        self.guard(draft)
+        return True
+
+    def defer(self, draft_id: str, error: str) -> None:
+        with self.db:
+            self.db.execute("UPDATE dm_outbox SET error=? WHERE id=? AND account=? AND state='draft'", (error, draft_id, self.dm.account))
+
+    async def send_message(self, peer: str, content: str, command_id: str) -> dict:
+        """Send a user-selected message through the same friendship gate as agent recommendations."""
+        await self.dm.bind()
+        draft = self.dm.compose(peer, content, command_id)
+        return await self.dm.publish(draft['id'])
+
+    async def save_profile(self, profile: dict) -> dict:
+        """Allow recommendation preferences for an existing platform friend without refollowing."""
+        if not isinstance(profile, dict):
+            raise RpcError(-32602, 'INVALID_FRIEND_PROFILE')
+        peer = uid(profile.get('peer_uid'))
+        await self.dm.bind()
+        if (profile.get('auto_send') is True
+                and peer not in self.dm.allowed_peers and not self.get(peer)):
+            found = await self.lookup(peer)
+            if not found['mutual']:
+                raise RpcError(-32040, 'FRIEND_NOT_MUTUAL')
+            self.social.save(profile, pending_connection=True)
+            self.register(found['peer'], greet=False)
+            self.update(found['peer'], following=1, mutual=1, state='ready', checked=time.time(), follow_attempted=1)
+            return self.social.profile(found['peer'])
+        return self.social.save(profile)
 
     def allowed_peers(self) -> set[str]:
         """Grant only explicit, enabled, mutually confirmed recipients in the current account."""
@@ -101,6 +218,8 @@ class FriendConnections:
             labels = {'following': '正在关注 B 站账号', 'waiting_mutual': '已关注，等待对方回关',
                       'greeting': '已确认互关，招呼等待发送', 'ready': '招呼已确认发送，可以按偏好分享视频',
                       'blocked': '好友流程等待处理', 'uncertain': '招呼发送结果待确认，不重复发送'}
+            if state == 'ready' and not old['greet_required']:
+                labels['ready'] = '已确认互关，可以发送私信'
             self.dm.store.event('friend', labels.get(state, state), peer, error)
 
     async def tick(self) -> None:
@@ -154,6 +273,11 @@ class FriendConnections:
         if not relation['mutual']:
             self.state(peer, 'waiting_mutual')
             return
+        if not row['greet_required']:
+            self.state(peer, 'ready')
+            self.update(peer, next_check=time.time() + 300)
+            await self.send_waiting(peer)
+            return
         draft = self.db.execute('SELECT * FROM dm_outbox WHERE account=? AND id=?',
                                 (self.dm.account, row['greeting_id'])).fetchone() if row['greeting_id'] else None
         if not draft:
@@ -162,6 +286,7 @@ class FriendConnections:
         if draft['state'] == 'sent':
             self.state(peer, 'ready')
             self.update(peer, next_check=time.time() + 300)
+            await self.send_waiting(peer)
             return
         if draft['state'] in ('uncertain', 'sending', 'cancelled'):
             self.state(peer, 'uncertain', draft['error'] or 'DM_SEND_UNCERTAIN')
@@ -175,11 +300,27 @@ class FriendConnections:
         if result['state'] == 'sent':
             self.state(peer, 'ready')
             self.social.wake.set()
+            self.update(peer, next_check=time.time() + 10)
         elif result['state'] == 'uncertain':
             self.state(peer, 'uncertain', result.get('error') or 'DM_SEND_UNCERTAIN')
         else:
             self.state(peer, 'greeting', 'DM_SEND_LIMIT')
             self.update(peer, next_check=time.time() + 10)
+
+    async def send_waiting(self, peer: str) -> None:
+        if not self.dm.send_enabled:
+            return
+        draft = self.db.execute("""SELECT id FROM dm_outbox WHERE account=? AND peer=? AND state='draft'
+            AND error IN ('FRIEND_ADD_REQUIRED','FRIEND_GREETING_PENDING') ORDER BY created LIMIT 1""", (self.dm.account, peer)).fetchone()
+        if draft:
+            try:
+                await self.dm.publish_when_ready(draft['id'])
+            except RpcError as exc:
+                # Delivery windows/caps must not turn a healthy friendship into a failed add.
+                self.dm.store.event('friend', '待发内容尚未满足发送条件', peer, self.dm.safe_error(exc))
+                self.update(peer, next_check=time.time() + 60)
+            else:
+                self.update(peer, next_check=time.time() + 10)
 
     def start(self) -> None:
         if self.task is None or self.task.done():

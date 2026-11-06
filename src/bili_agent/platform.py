@@ -81,7 +81,7 @@ class Platform:
                                 "identity": self.identity, "sessions": self.sessions, "messages": self.messages,
                                 "send_dm": self.send_dm, "share_video": self.share_video, 'send_comment': self.send_comment,
                                 "video_action": self.video_action, "favorite_folders": self.favorite_folders,
-                                'relation': self.relation, 'follow': self.follow}
+                                'relation': self.relation, 'follow': self.follow, 'contacts': self.contacts}
                     if operation not in handlers:
                         raise RpcError(-32601, "UNKNOWN_PLATFORM_OPERATION")
                     result = await handlers[operation](params)
@@ -155,6 +155,46 @@ class Platform:
             return {'requested': True}
         finally:
             request_settings.set_wbi_retry_times(previous)
+
+    async def contacts(self, params: dict) -> dict:
+        """Read a platform relationship page; do not confuse a profile with a mutual friend."""
+        from bilibili_api import user
+        from .library import cover_url
+        kind, page = params.get('kind', 'mutual'), params.get('page', 1)
+        account = params.get('account_uid')
+        if (kind not in ('mutual', 'followers', 'following') or type(page) is not int or not 1 <= page <= 100
+                or not isinstance(account, str) or not re.fullmatch(r'[1-9][0-9]{0,29}', account)):
+            raise RpcError(-32602, 'INVALID_CONTACT_PAGE')
+        size = 50
+        target = user.User(int(account), credential=self.credential())
+        data = (await user.get_self_friends(credential=self.credential()) if kind == 'mutual'
+                else await target.get_followers(pn=page, ps=size) if kind == 'followers'
+                else await target.get_followings(pn=page, ps=size))
+        if not isinstance(data, dict) or not isinstance(data.get('list'), list):
+            raise RpcError(-32010, 'INVALID_RELATION_RESPONSE')
+        raw = data['list']
+        total = len(raw) if kind == 'mutual' else data.get('total')
+        if type(total) is not int or total < 0:
+            raise RpcError(-32010, 'INVALID_RELATION_RESPONSE')
+        if kind == 'mutual':
+            raw = raw[(page - 1) * size:page * size]
+        items = []
+        for item in raw:
+            if not isinstance(item, dict):
+                raise RpcError(-32010, 'INVALID_RELATION_RESPONSE')
+            peer, attribute = str(item.get('mid', '')), item.get('attribute')
+            if not re.fullmatch(r'[1-9][0-9]{0,29}', peer) or type(attribute) is not int or attribute not in (0, 1, 2, 6, 128):
+                raise RpcError(-32010, 'INVALID_RELATION_RESPONSE')
+            if peer == account or attribute == 128 or (kind != 'mutual' and attribute == 6):
+                continue
+            if kind == 'mutual' and attribute != 6:
+                raise RpcError(-32010, 'INVALID_RELATION_RESPONSE')
+            items.append({'peer': peer, 'name': str(item.get('uname') or peer)[:50],
+                          'avatar': cover_url(item.get('face')), 'kind': kind})
+        truncated = total > (1000 if kind == 'followers' else 5000)
+        return {'items': items, 'kind': kind, 'page': page, 'source_total': total,
+                'has_more': bool(raw) and page * size < total and page < (20 if kind == 'followers' else 100),
+                'limited': truncated or (not raw and (page - 1) * size < total)}
 
     async def messages(self, params):
         from bilibili_api import session

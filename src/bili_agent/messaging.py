@@ -421,6 +421,8 @@ class Messaging:
                 parent = self.db.execute('SELECT state FROM dm_outbox WHERE id=? AND account=?', (row['depends_on'], self.account)).fetchone()
                 if not parent or parent['state'] != 'sent':
                     raise RpcError(-32040, 'CARD_REASON_NOT_SENT')
+            if self.friends and not await self.friends.connections.prepare_send(row):
+                return dict(self.db.execute('SELECT * FROM dm_outbox WHERE id=?', (draft_id,)).fetchone())
             if row['peer'] not in self.allowed_peers:
                 raise RpcError(-32040, 'RECIPIENT_NOT_ENABLED')
             if self.friends:
@@ -449,7 +451,7 @@ class Messaging:
                 if not re.fullmatch(r'[1-9][0-9]{0,39}', receipt):
                     raise RpcError(-32040, 'SEND_RECEIPT_MISSING')
                 with self.db:
-                    self.db.execute("UPDATE dm_outbox SET state='sent',receipt=? WHERE id=?", (receipt, draft_id))
+                    self.db.execute("UPDATE dm_outbox SET state='sent',receipt=?,error=NULL WHERE id=?", (receipt, draft_id))
                     self.db.execute("INSERT OR IGNORE INTO dm_messages(account,peer,msg_key,direction,text,timestamp,state) VALUES(?,?,?,'outgoing',?,?,'sent')",
                                     (self.account, row['peer'], receipt, row['text'], time.time()))
             except asyncio.CancelledError:

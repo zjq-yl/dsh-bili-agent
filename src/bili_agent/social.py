@@ -367,7 +367,7 @@ class Social:
         if (peer == account or not isinstance(name, str) or not 1 <= len(name.strip()) <= 50
                 or not isinstance(category, str) or not 1 <= len(category.strip()) <= 30
                 or not isinstance(style, str) or len(style) > 500
-                or not isinstance(interests, list) or not 1 <= len(interests) <= 12
+                or not isinstance(interests, list) or not (1 if recommend else 0) <= len(interests) <= 12
                 or any(not isinstance(item, str) or not 1 <= len(item.strip()) <= 30 for item in interests)
                 or type(recommend) is not bool or type(auto_send) is not bool):
             raise RpcError(-32602, 'INVALID_FRIEND_PROFILE')

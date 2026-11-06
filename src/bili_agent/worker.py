@@ -96,11 +96,19 @@ class Runtime:
         if method == 'friends.status':
             return self.social.status()
         if method == 'friends.save':
-            return self.social.save(params.get('profile'))
+            return await self.social.connections.save_profile(params.get('profile'))
         if method == 'friends.connect':
             return await self.social.connections.connect(params.get('profile'), params.get('greeting', ''))
         if method == 'friends.connection':
             return self.social.connections.control(params.get('peer_uid'), params.get('action'))
+        if method == 'friends.directory':
+            return await self.social.connections.directory(params.get('kind', 'mutual'), params.get('page', 1))
+        if method == 'friends.lookup':
+            return await self.social.connections.lookup(params.get('peer_uid'))
+        if method == 'friends.contact':
+            return await self.social.connections.contact(params.get('peer_uid'), params.get('action'), params.get('name', ''))
+        if method == 'friends.message':
+            return await self.social.connections.send_message(params.get('peer_uid'), params.get('text'), params.get('command_id'))
         if method == 'friends.preferences':
             if params.get('pause_today') is True:
                 peer = uid(params.get('peer_uid'))

@@ -21,7 +21,17 @@ const titles = ['用 Python 整理日常工作', '从零理解机器学习', '�
 const items = titles.map((title, i) => ({ id: i + 1, title, bvid: `BV${String(i + 1).padStart(10, '0')}`, page: 1, author: '演示 UP 主', state: 'done', duration: 180 + i * 23, cover: `https://i0.hdslb.com/bfs/archive/panel-test-${i}.svg`, summary: '这是只在详情中展示的合成总结。', assessment: { rating: i % 3 ? '可以看' : '值得看', reason: '这是测试评价理由。' } }))
 state.automation.assessments = items.map(item => ({ assessment: item.assessment }))
 const actions = []
+const contacts = {
+  mutual: [{ peer: '200', name: '合成互关好友', kind: 'mutual' }],
+  followers: [{ peer: '201', name: '合成粉丝', kind: 'followers' }],
+  following: [{ peer: '202', name: '合成关注 UP 主', kind: 'following' }],
+}
 const panel = await startPanel({ async call(method, params) {
+  if (method === 'friends.directory') return { items: params.page === 1 ? contacts[params.kind] : [],
+    page: params.page, source_total: 1, has_more: params.kind === 'following' && params.page === 1 }
+  if (method === 'friends.lookup') return { peer: params.peer_uid, kind: 'mutual' }
+  if (method === 'friends.contact') contacts.followers[0].connection = { state: params.action === 'decline' ? 'declined' : 'pending' }
+  if (method === 'friends.message') { actions.push({ method, params }); return { state: 'sent' } }
   if (method === 'library.list') {
     const found = items.filter(item => item.title.includes(params.query || '') && (!params.rating || item.assessment.rating === params.rating))
     return { items: found.slice(params.offset, params.offset + params.limit), total: found.length, counts: { all: items.length, '值得看': 6, '可以看': 10, '没必要看': 0, unrated: 0 } }
@@ -180,6 +190,28 @@ try {
   assert.equal(await evaluate("document.getElementById('browse-history').hidden"), false)
   await evaluate("document.getElementById('tab-browse-plan').click()")
   await navigate('friends-section')
+  await until("document.getElementById('contact-list').textContent.includes('合成互关好友')")
+  assert.equal(actions.some(x => ['friends.contact', 'friends.message', 'friends.connect'].includes(x.method)), false, 'listing never follows or sends')
+  await screenshot('friends-mutual-desktop')
+  await evaluate("[...document.querySelectorAll('#contact-list button')].find(x=>x.textContent==='发私信').click(); document.getElementById('contact-message-text').value='测试选择发送'; document.getElementById('contact-message-form').requestSubmit()")
+  await until("document.getElementById('contact-message-status').textContent.includes('已确认发送')")
+  assert.ok(actions.some(x => x.method === 'friends.message' && x.params.peer_uid === '200' && x.params.text === '测试选择发送' && x.params.command_id.startsWith('panel-note-')))
+  await evaluate("document.getElementById('close-contact').click(); document.querySelector('[data-contacts=followers]').click()")
+  await until("document.getElementById('contact-list').textContent.includes('合成粉丝')")
+  await evaluate("[...document.querySelectorAll('#contact-list button')].find(x=>x.textContent==='不回关').click()")
+  await until("document.getElementById('contact-list').textContent.includes('已选择不回关')")
+  await screenshot('friends-followers-desktop')
+  await evaluate("[...document.querySelectorAll('#contact-list button')].find(x=>x.textContent==='改为回关').click()")
+  await until("document.getElementById('notice').textContent.includes('已安排回关')")
+  assert.ok(actions.some(x => x.method === 'friends.contact' && x.params.action === 'follow_back'))
+  await evaluate("document.querySelector('[data-contacts=following]').click()")
+  await until("document.getElementById('contact-list').textContent.includes('合成关注 UP 主')")
+  assert.equal(await evaluate("[...document.querySelectorAll('#contact-list button')].some(x=>x.textContent==='发私信')"), false)
+  await evaluate("document.getElementById('contact-next').click()")
+  await until("document.getElementById('contact-page').textContent.includes('第 2 页')")
+  await evaluate("document.getElementById('contact-uid').value='200'; document.getElementById('contact-search').requestSubmit()")
+  await until("document.getElementById('contact-lookup').textContent.includes('UID 200')")
+  await evaluate("document.querySelector('[data-contacts=mutual]').click()")
   await evaluate("document.getElementById('new-friend').click()")
   assert.equal(await evaluate('document.activeElement.id'), 'friend-uid')
   assert.equal(await evaluate("document.getElementById('friend-connect').checked"), true)
@@ -203,6 +235,11 @@ try {
     await evaluate("document.getElementById('tab-video-tools').click()")
     await noOverflow(`narrow ${width} video tools`)
     await evaluate("document.getElementById('tab-video-history').click()")
+    await navigate('friends-section')
+    await evaluate("document.querySelector('[data-contacts=mutual]').click()")
+    await until("document.getElementById('contact-list').textContent.includes('合成互关好友')")
+    await noOverflow(`narrow ${width} mutual directory`)
+    if (width === 390) await screenshot('friends-mutual-mobile')
   }
   await call('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1100, deviceScaleFactor: 1, mobile: false }, sessionId)
   await navigate('overview')
@@ -215,7 +252,7 @@ try {
   await evaluate("document.getElementById('retry-connection').click()")
   await until("document.getElementById('connection-alert').hidden")
   assert.deepEqual(errors, [], 'no uncaught JS exceptions')
-  console.log('PASS: 8 routes, 5-column / 15-item library, covers, hidden summaries, detail dialog, filters/search/pagination, keyboard tabs, enqueue, schedule preview/validation/save, friend follow form and live lifecycle, pause/edit, live updates, reconnect, 390/360px overflow; screenshots in data/ui-checks (synthetic data).')
+  console.log('PASS: 8 routes, 5-column library, video detail/filter/search, schedule validation/save, mutual/fans/following directories, UID lookup, direct DM, decline/follow-back, contact pagination, follow lifecycle, pause/edit, live updates, reconnect, 390/360px overflow; screenshots in data/ui-checks (synthetic data).')
   await call('Browser.close')
 } finally {
   socket?.close()

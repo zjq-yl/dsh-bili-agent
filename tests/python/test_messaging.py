@@ -25,6 +25,8 @@ class FakePlatform:
     async def request(self, operation, params):
         if operation == 'identity':
             return {'uid': self.uid, 'name': 'test', 'can_send_dm': True}
+        if operation == 'relation':
+            return {'following': True, 'followed_by': True, 'mutual': True, 'blocked': False}
         if operation == 'sessions':
             return {'session_list': [{'talker_id': 22, 'session_type': 1}]}
         if operation == 'messages':

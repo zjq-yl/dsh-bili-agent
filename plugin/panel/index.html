@@ -96,9 +96,14 @@
 
     </section>
     <section id="friends-section" class="card" hidden>
-      <div class="section-heading"><div><h2>好友列表</h2></div><button id="new-friend" type="button" class="primary">＋ 添加好友</button></div>
-      <p class="hint">添加指定 UID → B 站关注 → 等待对方回关 → 发送一次招呼 → 按兴趣分享。B 站关注无需审批，这里的确认以互相关注为准。</p>
+      <div class="section-heading"><div><h2>我的 B 站关系</h2><p class="subtle">互相关注才是好友；粉丝是否回关，由你决定。</p></div><div class="contact-tools"><button id="refresh-contacts" type="button" class="secondary">刷新关系</button><button id="new-friend" type="button" class="primary">＋ 添加好友</button></div></div>
+      <div class="rating-tabs contact-tabs" role="group" aria-label="B站关系分类"><button type="button" data-contacts="mutual" aria-pressed="true">互关好友</button><button type="button" data-contacts="followers" aria-pressed="false">我的粉丝</button><button type="button" data-contacts="following" aria-pressed="false">我的关注</button><button type="button" data-contacts="profiles" aria-pressed="false">推荐档案与添加进度</button></div>
+      <form id="contact-search" class="library-search"><label class="visually-hidden" for="contact-uid">按 UID 检索平台关系</label><input id="contact-uid" inputmode="numeric" pattern="[1-9][0-9]{0,29}" required placeholder="输入 UID，检查是否已经是好友"><button type="submit" class="secondary">查找关系</button></form>
+      <div id="contact-lookup" aria-live="polite" hidden></div>
+      <div id="contact-directory"><p id="contact-status" class="hint" role="status">正在读取 B 站互关好友…</p><div id="contact-list" class="contact-grid"></div><div class="library-pagination"><span id="contact-page" class="subtle"></span><div><button id="contact-prev" type="button" class="secondary" disabled>上一页</button><button id="contact-next" type="button" class="secondary" disabled>下一页</button></div></div></div>
+      <div id="contact-profiles" hidden><p class="hint">这是本地推荐偏好与添加进度，不代表 B 站已经互关。平台好友请在“互关好友”查看。</p>
       <div id="friends" class="drafts"><p class="empty">尚未添加好友档案</p></div>
+      </div>
       <details id="friend-editor" class="editor-panel"><summary>添加 / 编辑好友</summary>
       <form id="friend-form">
         <div class="friend-connect-settings"><label class="check"><input id="friend-connect" type="checkbox" checked>关注这个 B 站账号，并在互关后打招呼</label><p class="subtle">仅授权你填写的 UID；确认互关后纳入该账号的私信范围。私信总开关仍需在 DSH 开启。取消勾选则只保存本地档案。</p><label id="friend-greeting-field">首次招呼（留空使用角色名生成简短招呼）<textarea id="friend-greeting" rows="2" maxlength="800" placeholder="例如：你好呀，很高兴认识你！以后看到适合你的内容会分享给你。"></textarea></label></div>
@@ -142,5 +147,6 @@
     <footer>本地存储 · 字幕与音频分析 · <span id="version">开发版</span></footer>
   </main>
   <dialog id="result-dialog" aria-labelledby="result-title"><div class="dialog-heading"><h2 id="result-title">视频总结</h2><button id="close-result" class="secondary" aria-label="关闭总结">关闭 ×</button></div><div id="result-body"></div></dialog>
+  <dialog id="contact-dialog" aria-labelledby="contact-dialog-title"><div class="dialog-heading"><h2 id="contact-dialog-title">发送私信</h2><button id="close-contact" type="button" class="secondary">关闭 ×</button></div><form id="contact-message-form"><label>接收者 UID<input id="contact-message-peer" readonly required></label><label>私信内容<textarea id="contact-message-text" rows="5" maxlength="800" required placeholder="想对这位好友说些什么？"></textarea></label><p class="hint">发送前再次检查平台关系。不是互关好友时，保留这条消息，先关注并等待对方回关。</p><p id="contact-message-status" role="status" class="hint"></p><button type="submit" class="primary">发送私信</button></form></dialog>
 </body>
 </html>
