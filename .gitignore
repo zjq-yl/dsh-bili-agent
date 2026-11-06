@@ -14,3 +14,4 @@ debug.log
 .ruff_cache/
 *.egg-info/
 build/
+/B站自主浏览智能体详细设计方案.docx
