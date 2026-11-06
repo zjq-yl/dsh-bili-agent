@@ -6,6 +6,7 @@ import math
 import re
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 
 from .protocol import RpcError
 from .content import summary_json
@@ -72,6 +73,9 @@ class Messaging:
         self.task = None
         self.auto_send = False
         self.wake = asyncio.Event()
+        self.message_event = asyncio.Event()
+        self.draft_event = asyncio.Event()
+        self.stage_errors = {}
         self.memory_tasks = {}
         self.memory_counts = {}
         self.friends = None
@@ -135,6 +139,7 @@ class Messaging:
             item['peer_allowed'] = item['peer'] in self.allowed_peers
         return {'state': self.state, 'account_uid': self.account, 'send_enabled': self.send_enabled,
                 'auto_send': self.auto_send, 'poll_interval_seconds': POLL_INTERVAL,
+                'reply_dispatch': 'message_event', 'receive_transport': 'http_polling',
                 'allowed_peers': sorted(self.allowed_peers), 'error': self.error, 'outbox': [dict(row) for row in rows],
                 'last_sync': self.last_sync, 'delivery_window': self.delivery_window(),
                 'listener_started': self.listener_started, 'next_poll_at': self.next_poll_at,
@@ -235,8 +240,13 @@ class Messaging:
                 count += inserted
                 if inserted and direction == 'incoming':
                     received.append(key)
+                    if (self.listener_started is not None and timestamp > self.listener_started
+                            and (not self.auto_send or peer in self.allowed_peers)):
+                        self.db.execute('UPDATE dm_messages SET accepted=1 WHERE account=? AND msg_key=?', (account, key))
         for key in received:
             self.store.event('dm', f'收到来自 UID {peer} 的消息', key)
+        if received:
+            self.message_event.set()
         return count
 
     def history(self, peer, limit=20):
@@ -363,6 +373,7 @@ class Messaging:
         row = self.db.execute('SELECT * FROM dm_outbox WHERE account=? AND ' + ('source_key=?' if source_key else 'command_id=?'), (account, source_key or command_id)).fetchone()
         if row['peer'] != peer or row['text'] != text.strip():
             raise RpcError(-32040, 'IDEMPOTENCY_KEY_CONFLICT')
+        self.draft_event.set()
         return dict(row)
 
     async def publish(self, draft_id):
@@ -510,6 +521,8 @@ class Messaging:
             if auto_send != self.auto_send:
                 self.auto_send = auto_send
                 self.wake.set()
+                self.message_event.set()
+                self.draft_event.set()
                 self.store.event('dm', '已切换为自动回复' if auto_send else '已切换为仅生成草稿')
             return self.status()
         self.store.event('dm', '正在验证账号，准备启动私信监听')
@@ -520,6 +533,7 @@ class Messaging:
             self.store.event('dm', '监听启动失败', error=self.error)
             raise
         self.auto_send = auto_send
+        self.stage_errors.clear()
         self.state, self.error = 'RUNNING', None
         self.listener_started = time.time()
         self.next_poll_at = self.listener_started
@@ -528,86 +542,120 @@ class Messaging:
         self.task = asyncio.create_task(self.watch(self.listener_started))
         return self.status()
 
-    async def watch(self, started):
+    async def watch(self, started: float) -> None:
+        """Supervise independent receive, message-event and draft-event consumers."""
         self.listener_started = started
+        self.message_event.set()  # Recover durable unfinished replies after restart.
+        self.draft_event.set()
+        tasks = [asyncio.create_task(self.drive('receive', self.receive_once, self.wake)),
+                 asyncio.create_task(self.drive('reply', self.reply_pending, self.message_event)),
+                 asyncio.create_task(self.drive('send', self.send_pending_reply, self.draft_event))]
+        try:
+            await asyncio.gather(*tasks)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            self.next_poll_at = None
+            self.state, self.error = 'BLOCKED', self.safe_error(exc)
+            self.store.event('dm', '监听已暂停，需要处理错误后重新启动', error=self.error)
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            self.next_poll_at = None
+
+    async def drive(self, stage: str, action: Callable[[], Awaitable[float | None]], event: asyncio.Event) -> None:
+        """Consume wake events; timers are only for reception, retry and send cooldown."""
         failures = 0
         while True:
-            self.wake.clear()
-            self.next_poll_at = None
+            event.clear()
+            if stage == 'receive':
+                self.next_poll_at = None
             try:
-                self.error = None
-                await self.sync()
-                if self.auto_send:
-                    pending = self.db.execute("""SELECT o.id FROM dm_outbox o WHERE o.account=? AND o.state='draft'
-                        AND o.peer IN (SELECT value FROM json_each(?))
-                        AND EXISTS(SELECT 1 FROM dm_messages m WHERE m.account=o.account AND m.peer=o.peer AND m.accepted=1 AND m.deleted=0
-                        AND (m.msg_key=o.source_key OR o.command_id LIKE 'system-wait-%')) ORDER BY o.created LIMIT 1""", (self.account, json.dumps(list(self.allowed_peers)))).fetchone()
-                    if pending:
-                        published = await self.publish_when_ready(pending['id'])
-                        if published['state'] == 'uncertain':
-                            raise RpcError(-32040, 'DM_SEND_UNCERTAIN')
-                peers = self.db.execute("SELECT DISTINCT peer FROM dm_messages WHERE account=? AND direction='incoming' AND deleted=0 AND state IN ('new','retry') AND (timestamp>? OR accepted=1)", (self.account, started)).fetchall()
-                for row in peers[:3]:
-                    peer = row[0]
-                    if self.auto_send and peer not in self.allowed_peers:
-                        if peer not in self.scope_logged:
-                            self.store.event('dm', '该会话不在允许自动回复范围，未自动处理', peer)
-                            self.scope_logged.add(peer)
-                        continue
-                    message = self.db.execute("SELECT msg_key FROM dm_messages WHERE account=? AND peer=? AND direction='incoming' AND deleted=0 AND state IN ('new','retry') AND (timestamp>? OR accepted=1) ORDER BY timestamp DESC LIMIT 1", (self.account, peer, started)).fetchone()
-                    # 合并本轮已收到的消息；模型调用期间新到的消息留给下一轮。
-                    batch = self.db.execute("SELECT msg_key FROM dm_messages WHERE account=? AND peer=? AND direction='incoming' AND deleted=0 AND state IN ('new','retry') AND (timestamp>? OR accepted=1)",
-                                            (self.account, peer, started)).fetchall()
-                    with self.db:
-                        self.db.execute("UPDATE dm_messages SET accepted=1,state='retry' WHERE account=? AND msg_key=?", (self.account, message[0]))
-                    try:
-                        draft = await self.draft_reply(message[0])
-                    except RpcError as exc:
-                        if str(exc) not in RECOVERABLE_MODEL_ERRORS:
-                            raise
-                        key = 'system-wait-' + hashlib.sha256(message[0].encode()).hexdigest()[:24]
-                        fallback = self.compose(peer, '你的消息已收到，但模型服务暂时不可用，尚未完成处理。我已保留消息，服务恢复后会继续。', key)
-                        if self.auto_send and fallback['state'] == 'draft':
-                            await self.publish_when_ready(fallback['id'])
-                        self.error = str(exc)
-                        continue
-                    with self.db:
-                        self.db.executemany("UPDATE dm_messages SET state='coalesced' WHERE account=? AND msg_key=? AND state IN ('new','retry')",
-                                            [(self.account, item[0]) for item in batch if item[0] != message[0]])
-                        self.db.executemany("UPDATE dm_outbox SET state='cancelled' WHERE account=? AND command_id=? AND state='draft'",
-                            [(self.account, 'system-wait-' + hashlib.sha256(item[0].encode()).hexdigest()[:24]) for item in batch])
-                    if self.auto_send and draft.get('state') == 'draft':
-                        published = await self.publish_when_ready(draft['id'])
-                        if published['state'] == 'uncertain':
-                            raise RpcError(-32040, 'DM_SEND_UNCERTAIN')
-                    count = self.db.execute("SELECT COUNT(*) FROM dm_messages WHERE account=? AND peer=? AND direction='incoming' AND deleted=0", (self.account, peer)).fetchone()[0]
-                    task = self.memory_tasks.get(peer)
-                    if count - self.memory_counts.get(peer, 0) >= 6 and (task is None or task.done()):
-                        self.memory_tasks[peer] = asyncio.create_task(self.remember_later(peer, count))
+                delay = await action()
                 failures = 0
-            except asyncio.CancelledError:
-                self.next_poll_at = None
-                raise
+                self.stage_errors.pop(stage, None)
+                self.error = next(iter(self.stage_errors.values()), None)
             except RpcError as exc:
-                self.error = str(exc)
-                self.store.event('dm', '私信处理等待恢复', error=self.error)
                 if str(exc) not in TRANSIENT_PLATFORM_ERRORS | {'DM_SEND_BUSY', 'DM_SEND_LIMIT'} | RECOVERABLE_MODEL_ERRORS:
-                    self.state, self.error = 'BLOCKED', str(exc)
-                    self.next_poll_at = None
-                    self.store.event('dm', '监听已暂停，需要处理错误后重新启动', error=self.error)
-                    return
+                    raise
                 failures += 1
-            except Exception as exc:
-                self.state, self.error = 'BLOCKED', type(exc).__name__
-                self.next_poll_at = None
-                self.store.event('dm', '监听已暂停，需要处理错误后重新启动', error=self.error)
-                return
-            delay = min(300, POLL_INTERVAL * 2 ** min(failures, 5)) if failures else POLL_INTERVAL
-            self.next_poll_at = time.time() + delay
+                self.stage_errors[stage] = self.error = str(exc)
+                self.store.event('dm', '私信处理等待恢复', error=self.error)
+                delay = min(300, POLL_INTERVAL * 2 ** min(failures, 5))
+            if stage == 'receive':
+                self.next_poll_at = time.time() + delay
             try:
-                await asyncio.wait_for(self.wake.wait(), delay)
+                if delay is None:
+                    await event.wait()
+                else:
+                    await asyncio.wait_for(event.wait(), delay)
             except TimeoutError:
                 pass
+
+    async def receive_once(self) -> float:
+        """Receive independently; ingest publishes events only after durable insertion."""
+        await self.sync()
+        return POLL_INTERVAL
+
+    async def send_pending_reply(self) -> float | None:
+        """Drain eligible replies on draft events and cooldown expiry."""
+        if not self.auto_send:
+            return None
+        pending = self.db.execute("""SELECT o.id FROM dm_outbox o WHERE o.account=? AND o.state='draft'
+            AND o.peer IN (SELECT value FROM json_each(?))
+            AND EXISTS(SELECT 1 FROM dm_messages m WHERE m.account=o.account AND m.peer=o.peer AND m.accepted=1 AND m.deleted=0
+            AND (m.msg_key=o.source_key OR o.command_id LIKE 'system-wait-%')) ORDER BY o.created LIMIT 1""", (self.account, json.dumps(list(self.allowed_peers)))).fetchone()
+        if not pending:
+            return None
+        delay = self.delivery_window()['next_at'] - time.time()
+        if delay > 0:
+            return delay
+        published = await self.publish_when_ready(pending['id'])
+        if published['state'] == 'uncertain':
+            raise RpcError(-32040, 'DM_SEND_UNCERTAIN')
+        return 1 if published['state'] == 'draft' else 0
+
+    async def reply_pending(self) -> float | None:
+        """Drain persisted message events, coalescing bursts per conversation."""
+        started = self.listener_started
+        retry_needed = False
+        peers = self.db.execute("SELECT DISTINCT peer FROM dm_messages WHERE account=? AND direction='incoming' AND deleted=0 AND state IN ('new','retry') AND (timestamp>? OR accepted=1)", (self.account, started)).fetchall()
+        for row in peers:
+            peer = row[0]
+            if self.auto_send and peer not in self.allowed_peers:
+                if peer not in self.scope_logged:
+                    self.store.event('dm', '该会话不在允许自动回复范围，未自动处理', peer)
+                    self.scope_logged.add(peer)
+                continue
+            message = self.db.execute("SELECT msg_key FROM dm_messages WHERE account=? AND peer=? AND direction='incoming' AND deleted=0 AND state IN ('new','retry') AND (timestamp>? OR accepted=1) ORDER BY timestamp DESC LIMIT 1", (self.account, peer, started)).fetchone()
+            # 合并本轮已收到的消息；模型调用期间新到的消息留给下一轮。
+            batch = self.db.execute("SELECT msg_key FROM dm_messages WHERE account=? AND peer=? AND direction='incoming' AND deleted=0 AND state IN ('new','retry') AND (timestamp>? OR accepted=1)",
+                                    (self.account, peer, started)).fetchall()
+            with self.db:
+                self.db.execute("UPDATE dm_messages SET accepted=1,state='retry' WHERE account=? AND msg_key=?", (self.account, message[0]))
+            try:
+                await self.draft_reply(message[0])
+            except RpcError as exc:
+                if str(exc) not in RECOVERABLE_MODEL_ERRORS:
+                    raise
+                key = 'system-wait-' + hashlib.sha256(message[0].encode()).hexdigest()[:24]
+                self.compose(peer, '你的消息已收到，但模型服务暂时不可用，尚未完成处理。我已保留消息，服务恢复后会继续。', key)
+                retry_needed = True
+                continue
+            with self.db:
+                self.db.executemany("UPDATE dm_messages SET state='coalesced' WHERE account=? AND msg_key=? AND state IN ('new','retry')",
+                                    [(self.account, item[0]) for item in batch if item[0] != message[0]])
+                self.db.executemany("UPDATE dm_outbox SET state='cancelled' WHERE account=? AND command_id=? AND state='draft'",
+                    [(self.account, 'system-wait-' + hashlib.sha256(item[0].encode()).hexdigest()[:24]) for item in batch])
+            count = self.db.execute("SELECT COUNT(*) FROM dm_messages WHERE account=? AND peer=? AND direction='incoming' AND deleted=0", (self.account, peer)).fetchone()[0]
+            task = self.memory_tasks.get(peer)
+            if count - self.memory_counts.get(peer, 0) >= 6 and (task is None or task.done()):
+                self.memory_tasks[peer] = asyncio.create_task(self.remember_later(peer, count))
+        return POLL_INTERVAL if retry_needed else None
 
     async def remember_later(self, peer: str, count: int) -> None:
         """Batch long-term memory updates without delaying the next inbox check."""

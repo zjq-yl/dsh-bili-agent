@@ -232,7 +232,7 @@ class MessagingTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(entered.wait(), 2)
             during = self.dm.status()
             self.assertTrue(any(item['stage'] == 'reply' for item in during['activities']))
-            self.assertIsNone(during['next_poll_at'])
+            self.assertIsNotNone(during['next_poll_at'])  # Reception continues during model generation.
             self.assertFalse(during['incoming'][0]['before_listener'])
             self.assertNotIn('text', during['incoming'][0])
             release.set()
@@ -343,6 +343,45 @@ class MessagingTests(unittest.IsolatedAsyncioTestCase):
                 while self.dm.last_sync == previous:
                     await asyncio.sleep(.005)
             self.assertEqual(self.dm.state, 'RUNNING')
+
+    async def test_message_event_replies_without_waiting_for_next_poll_and_deduplicates(self):
+        with patch('bili_agent.messaging.POLL_INTERVAL', 3600):
+            await self.dm.start()
+            async with asyncio.timeout(2):
+                while self.dm.last_sync is None:
+                    await asyncio.sleep(.005)
+            previous = self.dm.last_sync
+            incoming = message(age=0)
+            self.dm.ingest('22', [incoming, incoming])
+            async with asyncio.timeout(2):
+                while not self.platform.sent:
+                    await asyncio.sleep(.005)
+            self.dm.ingest('22', [incoming])
+            await asyncio.sleep(.02)
+            self.assertEqual(len(self.platform.sent), 1)
+            self.assertEqual(len(self.model.calls), 1)
+            self.assertEqual(self.dm.last_sync, previous)
+
+    async def test_new_messages_are_received_and_persisted_while_reply_model_is_blocked(self):
+        entered, release = asyncio.Event(), asyncio.Event()
+        original = self.model.generate
+        async def slow(*args):
+            entered.set()
+            await release.wait()
+            return await original(*args)
+        self.model.generate = slow
+        with patch('bili_agent.messaging.POLL_INTERVAL', .005):
+            await self.dm.start()
+            self.platform.inbox = [message('101', age=0)]
+            await asyncio.wait_for(entered.wait(), 2)
+            self.platform.inbox.append(message('102', age=0))
+            async with asyncio.timeout(2):
+                while len(self.dm.history('22')) < 2:
+                    await asyncio.sleep(.005)
+            row = self.store.db.execute("SELECT accepted,state FROM dm_messages WHERE msg_key='102'").fetchone()
+            self.assertEqual(tuple(row), (1, 'new'))
+            self.assertEqual(self.platform.sent, [])
+            release.set()
 
     async def test_auto_reply_waits_when_another_sender_owns_the_send_lock(self):
         original = self.dm.publish
