@@ -17,6 +17,11 @@ const state = {
 }
 
 state.agents = { video: { state: 'RUNNING' }, interaction: { state: 'RUNNING', comments: [] } }
+state.automation.jobs[0].created = Date.now() / 1000 - 60
+state.automation.jobs.push(
+  { id: 9, kind: 'scheduled', keyword: '热门视频与科技动态', state: 'complete', created: Date.now() / 1000 - 3600, round_index: 3, rounds: 3, videos: [], deliveries: [] },
+  { id: 2, kind: 'request', peer: '201', keyword: '合成测试：较长的学习主题与推荐需求，用于检查记录标题截断和窄屏布局', state: 'failed', error: 'MODEL_NOT_CONFIGURED', created: Date.now() / 1000 - 120, round_index: 1, rounds: 3, videos: [], deliveries: [] },
+)
 const titles = ['用 Python 整理日常工作', '从零理解机器学习', '周末去山里走一走', '天文入门：认识星空', '一个人的简单晚餐', '给房间添一点绿色', '摄影里的光与影', '数学也可以很有趣', '从想法到一个小项目', '十分钟认识一座城市', '关于阅读的几个习惯', '做一张喜欢的书桌', '用代码记录生活', '大自然的声音', '轻松学一点新知识', '最后一页的测试视频']
 const items = titles.map((title, i) => ({ id: i + 1, title, bvid: `BV${String(i + 1).padStart(10, '0')}`, page: 1, author: '演示 UP 主', state: 'done', duration: 180 + i * 23, cover: `https://i0.hdslb.com/bfs/archive/panel-test-${i}.svg`, summary: '这是只在详情中展示的合成总结。', assessment: { rating: i % 3 ? '可以看' : '值得看', reason: '这是测试评价理由。' } }))
 state.automation.assessments = items.map(item => ({ assessment: item.assessment }))
@@ -188,6 +193,22 @@ try {
   await evaluate("document.getElementById('auto-scheduled').click()")
   await evaluate("document.getElementById('tab-browse-history').click()")
   assert.equal(await evaluate("document.getElementById('browse-history').hidden"), false)
+  assert.deepEqual(await evaluate("[...document.querySelectorAll('#browse-jobs > details')].map(x=>x.dataset.jobId)"), ['1', '2', '9'], 'creation time determines descending order, not ID')
+  assert.equal(await evaluate("document.querySelectorAll('#browse-jobs details[open]').length"), 0, 'history starts collapsed')
+  assert.ok(await evaluate("document.querySelector('#browse-jobs time').dateTime"), 'real creation time is shown')
+  await screenshot('browse-history-collapsed-desktop')
+  await evaluate("document.querySelector('#browse-jobs summary').focus()")
+  await call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' }, sessionId)
+  await call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }, sessionId)
+  await until("document.querySelector('#browse-jobs details').open")
+  state.automation.jobs[0].videos[0].checkpoint = 3
+  await until("document.querySelector('#browse-jobs .job-detail').textContent.includes('已总结 3 段')")
+  assert.equal(await evaluate("document.querySelector('#browse-jobs details').open"), true, 'live refresh preserves expansion')
+  assert.equal(await evaluate("document.activeElement === document.querySelector('#browse-jobs summary')"), true, 'live refresh preserves keyboard focus')
+  assert.equal(await evaluate("document.querySelectorAll('#browse-jobs details[open]').length"), 1)
+  await screenshot('browse-history-expanded-desktop')
+  await evaluate("document.querySelector('#browse-jobs details[data-job-id=\"2\"] summary').click()")
+  assert.ok(await evaluate("document.querySelector('#browse-jobs details[data-job-id=\"2\"] .error').textContent"), 'error remains available in expanded detail')
   await evaluate("document.getElementById('tab-browse-plan').click()")
   await navigate('friends-section')
   await until("document.getElementById('contact-list').textContent.includes('合成互关好友')")
@@ -235,6 +256,11 @@ try {
     await evaluate("document.getElementById('tab-video-tools').click()")
     await noOverflow(`narrow ${width} video tools`)
     await evaluate("document.getElementById('tab-video-history').click()")
+    await navigate('automation')
+    await evaluate("document.getElementById('tab-browse-history').click()")
+    await noOverflow(`narrow ${width} expandable history`)
+    if (width === 390) await screenshot('browse-history-mobile')
+    await evaluate("document.getElementById('tab-browse-plan').click()")
     await navigate('friends-section')
     await evaluate("document.querySelector('[data-contacts=mutual]').click()")
     await until("document.getElementById('contact-list').textContent.includes('合成互关好友')")
@@ -243,6 +269,11 @@ try {
   }
   await call('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1100, deviceScaleFactor: 1, mobile: false }, sessionId)
   await navigate('overview')
+  const savedJobs = state.automation.jobs
+  state.automation.jobs = []
+  await until("document.querySelector('#browse-jobs .empty') !== null")
+  state.automation.jobs = savedJobs
+  await until("document.querySelectorAll('#browse-jobs > details').length === 3")
   await call('Network.enable', {}, sessionId)
   await call('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 }, sessionId)
   await evaluate("document.getElementById('refresh').click()")

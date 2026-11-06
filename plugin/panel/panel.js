@@ -670,11 +670,24 @@ function renderAutomation(auto) {
   const jobsVersion = JSON.stringify(auto.jobs)
   if ($('browse-jobs').dataset.version !== jobsVersion) {
     $('browse-jobs').dataset.version = jobsVersion
-    $('browse-jobs').replaceChildren(...auto.jobs.map(job => {
-    const card = document.createElement('article'); card.className = 'job-card'
-    const top = document.createElement('div'); top.className = 'draft-top'; top.append(text('strong', job.kind === 'request' ? `好友请求 · UID ${job.peer}` : '定时浏览'), badge(states[job.state] || job.state))
+    const opened = new Set([...$('browse-jobs').querySelectorAll('details[open]')].map(item => item.dataset.jobId))
+    const focused = document.activeElement?.matches('#browse-jobs > details > summary') ? document.activeElement.parentElement.dataset.jobId : null
+    const jobs = [...auto.jobs].sort((a, b) => (b.created || 0) - (a.created || 0) || b.id - a.id)
+    $('browse-jobs').replaceChildren(...jobs.map(job => {
+    const record = document.createElement('details'); record.className = 'job-record'; record.dataset.jobId = String(job.id); record.open = opened.has(String(job.id))
+    const summary = document.createElement('summary')
+    const date = job.created ? new Date(job.created * 1000) : null
+    const time = text('time', date ? date.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '时间未记录', 'job-time')
+    if (date) time.dateTime = date.toISOString()
+    const title = job.kind === 'scheduled' && job.requirements?.discovery_source === 'popular_first' ? `热门优先 · ${job.keyword}` : job.keyword
+    const label = text('span', '', 'job-label'); label.append(text('strong', title || '未设置主题'), text('small', `#${job.id} · ${job.kind === 'request' ? `好友请求 · UID ${job.peer}` : '定时浏览'}`)); label.title = title || ''
+    const state = badge(states[job.state] || job.state); state.classList.add('job-state')
+    const arrow = text('span', '›', 'job-chevron'); arrow.setAttribute('aria-hidden', 'true')
+    summary.append(time, label, state, arrow)
+    const card = document.createElement('div'); card.className = 'job-detail'
+    record.append(summary, card)
     const analyzed = job.videos.filter(video => video.state === 'done').length
-    card.append(top, text('h3', job.kind === 'scheduled' && job.requirements?.discovery_source === 'popular_first' ? `热门优先 · 补充主题：${job.keyword}` : job.keyword), text('p', `${job.round_index} / ${job.rounds} 轮 · 已分析 ${analyzed} 个 · 跳过 ${job.videos.filter(video => video.error).length} 个`, 'subtle'))
+    card.append(text('p', `${job.round_index} / ${job.rounds} 轮 · 已分析 ${analyzed} 个 · 跳过 ${job.videos.filter(video => video.error).length} 个`, 'subtle'))
     if (job.blocked_reason || job.error) card.append(text('p', explain(job.blocked_reason || job.error), 'error'))
     for (const video of job.videos) {
       card.append(text('p', `${video.bvid} · ${names[video.state] || (video.error ? '已跳过' : '待获取')} · 已总结 ${video.checkpoint || 0} 段${video.error ? ` · ${explain(video.error)}` : ''}`, 'subtle'))
@@ -694,8 +707,9 @@ function renderAutomation(auto) {
         navigate('friends-section'); $('friend-editor').open = true; $('friend-uid').focus(); notice('已填入请求对象和兴趣，确认后点击“保存好友”启用后续主动推荐。')
       }))
     }
-      return card
+      return record
     }))
+    if (focused) [...$('browse-jobs').children].find(item => item.dataset.jobId === focused)?.querySelector('summary').focus({ preventScroll: true })
     if (!auto.jobs.length) $('browse-jobs').append(text('p', '等待每日探索时段，或等待好友发来推荐请求。', 'empty'))
   }
   const actionNames = { like: '点赞', favorite: '收藏', dislike: '不喜欢' }
