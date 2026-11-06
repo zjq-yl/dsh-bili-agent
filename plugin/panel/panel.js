@@ -94,7 +94,7 @@ function renderStatus(data) {
     $('agent-state').textContent = names[agent.state] || agent.state
     $('agent-detail').textContent = `${agent.queue.length} 个近期任务 · ${agent.queue.filter(v => v.state === 'done').length} 个已完成`
     $('dm-state').textContent = names[dm.state] || dm.state
-    $('dm-detail').textContent = dm.error ? explain(dm.error) : dm.state === 'RUNNING' ? (dm.auto_send ? '新消息自动回复' : '新消息只生成草稿') : '启动后每分钟检查新消息'
+    $('dm-detail').textContent = dm.error ? explain(dm.error) : dm.state === 'RUNNING' ? (dm.auto_send ? '新消息自动回复' : '新消息只生成草稿') : '启动后约每10秒检查新消息'
     $('send-badge').textContent = dm.send_enabled ? '发送已启用' : '发送未启用'
     $('dm-scope').textContent = dm.allowed_peers.length ? `允许回复的 UID：${dm.allowed_peers.join('、')}` : '尚未配置允许回复的账号。请在 DSH 插件设置中填写 dmAllowedPeers，并按需开启 dmSendEnabled。'
     renderTasks(agent.queue); renderOutbox(dm.outbox, dm); renderFriends(current.social); renderAutomation(current.automation); renderDmProgress(dm)
@@ -239,7 +239,7 @@ function renderDmProgress(dm) {
   $('dm-reply-expectation').textContent = dm.state === 'BLOCKED'
     ? `当前不会自动回复：${explain(dm.error)}。处理原因后点击“开启自动回复”。`
     : dm.state !== 'RUNNING' ? '监听未启动。启动后才会处理新收到的消息。'
-    : !dm.auto_send ? '当前只生成草稿，不会自动发送。需要切换时先停止监听，再开启自动回复。'
+    : !dm.auto_send ? '当前只生成草稿。点击“开启自动回复”可直接切换，已接收的回复草稿会按发送范围继续处理。'
     : '回复流程：检查到新消息 → 等待模型并生成草稿 → 等待发送窗口 → B 站返回回执。下次检查时间和最早可发送时间不等于保证送达时间。'
   const incoming = dm.incoming || []
   const incomingVersion = JSON.stringify(incoming)

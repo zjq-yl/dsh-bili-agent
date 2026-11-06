@@ -206,7 +206,7 @@ export function registerTools(
       text: { type: 'string', description: 'compose指定的私信正文，最多800字' },
       command_id: { type: 'string', description: 'compose幂等键，8至80位字母数字横线下划线；重试必须复用' },
       draft_id: { type: 'string', description: 'send要发布的草稿ID' },
-      auto_send: { type: 'boolean', description: 'start是否自动发送新消息回复，默认false只生成草稿' },
+      auto_send: { type: 'boolean', description: 'start是否自动发送回复；省略时按发送开关和UID白名单自动决定。false明确开启仅生成草稿。' },
     },
     output: textOutput,
     async execute(args, exec: ExecutionContext) {

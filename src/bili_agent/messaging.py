@@ -13,8 +13,9 @@ from .model import RECOVERABLE_MODEL_ERRORS
 
 
 MAX_MESSAGE_LENGTH = 800
-MIN_SEND_INTERVAL = 60
-POLL_INTERVAL = 60
+MIN_SEND_INTERVAL = 10
+POLL_INTERVAL = 10
+TRANSIENT_PLATFORM_ERRORS = {'PLATFORM_REQUEST_FAILED', 'PLATFORM_TIMEOUT', 'PLATFORM_BUSY'}
 
 
 def uid(value: str) -> str:
@@ -70,6 +71,9 @@ class Messaging:
         self.send_lock = asyncio.Lock()
         self.task = None
         self.auto_send = False
+        self.wake = asyncio.Event()
+        self.memory_tasks = {}
+        self.memory_counts = {}
         self.friends = None
         self.recommendations = None
         self.state, self.error = 'STOPPED', None
@@ -193,6 +197,8 @@ class Messaging:
                     if value != self.account and value not in peers:
                         peers.append(value)
         added = 0
+        if peer is None and self.auto_send:
+            peers = [value for value in peers if value in self.allowed_peers]
         for peer in peers:
             if peer == self.account:
                 continue
@@ -492,14 +498,19 @@ class Messaging:
             self.db.execute("UPDATE dm_outbox SET text='',state=CASE WHEN state='draft' THEN 'cancelled' ELSE state END WHERE account=? AND peer=?", (account, peer))
         return {'forgotten_peer': peer, 'scope': '本地私信正文、摘要与未发送草稿；平台已发消息及外部日志不在删除范围'}
 
-    async def start(self, auto_send=False):
+    async def start(self, auto_send=None):
+        """Default to configured send scope; explicit False keeps preview mode."""
+        if auto_send is None:
+            auto_send = self.send_enabled and bool(self.allowed_peers)
         if type(auto_send) is not bool:
             raise RpcError(-32602, 'INVALID_AUTO_SEND')
         if auto_send and (not self.send_enabled or not self.allowed_peers):
             raise RpcError(-32040, 'CONFIGURE_DM_SEND_SCOPE_FIRST')
         if self.task and not self.task.done():
             if auto_send != self.auto_send:
-                raise RpcError(-32040, 'STOP_DM_BEFORE_CHANGING_MODE')
+                self.auto_send = auto_send
+                self.wake.set()
+                self.store.event('dm', '已切换为自动回复' if auto_send else '已切换为仅生成草稿')
             return self.status()
         self.store.event('dm', '正在验证账号，准备启动私信监听')
         try:
@@ -514,20 +525,23 @@ class Messaging:
         self.next_poll_at = self.listener_started
         self.scope_logged.clear()
         self.store.event('dm', '私信监听已启动：自动回复' if auto_send else '私信监听已启动：只生成草稿')
-        self.task = asyncio.create_task(self.watch(self.listener_started, auto_send))
+        self.task = asyncio.create_task(self.watch(self.listener_started))
         return self.status()
 
-    async def watch(self, started, auto_send):
+    async def watch(self, started):
         self.listener_started = started
+        failures = 0
         while True:
+            self.wake.clear()
             self.next_poll_at = None
             try:
                 self.error = None
                 await self.sync()
-                if auto_send:
+                if self.auto_send:
                     pending = self.db.execute("""SELECT o.id FROM dm_outbox o WHERE o.account=? AND o.state='draft'
+                        AND o.peer IN (SELECT value FROM json_each(?))
                         AND EXISTS(SELECT 1 FROM dm_messages m WHERE m.account=o.account AND m.peer=o.peer AND m.accepted=1 AND m.deleted=0
-                        AND (m.msg_key=o.source_key OR o.command_id LIKE 'system-wait-%')) ORDER BY o.created LIMIT 1""", (self.account,)).fetchone()
+                        AND (m.msg_key=o.source_key OR o.command_id LIKE 'system-wait-%')) ORDER BY o.created LIMIT 1""", (self.account, json.dumps(list(self.allowed_peers)))).fetchone()
                     if pending:
                         published = await self.publish_when_ready(pending['id'])
                         if published['state'] == 'uncertain':
@@ -535,7 +549,7 @@ class Messaging:
                 peers = self.db.execute("SELECT DISTINCT peer FROM dm_messages WHERE account=? AND direction='incoming' AND deleted=0 AND state IN ('new','retry') AND (timestamp>? OR accepted=1)", (self.account, started)).fetchall()
                 for row in peers[:3]:
                     peer = row[0]
-                    if auto_send and peer not in self.allowed_peers:
+                    if self.auto_send and peer not in self.allowed_peers:
                         if peer not in self.scope_logged:
                             self.store.event('dm', '该会话不在允许自动回复范围，未自动处理', peer)
                             self.scope_logged.add(peer)
@@ -553,7 +567,7 @@ class Messaging:
                             raise
                         key = 'system-wait-' + hashlib.sha256(message[0].encode()).hexdigest()[:24]
                         fallback = self.compose(peer, '你的消息已收到，但模型服务暂时不可用，尚未完成处理。我已保留消息，服务恢复后会继续。', key)
-                        if auto_send and fallback['state'] == 'draft':
+                        if self.auto_send and fallback['state'] == 'draft':
                             await self.publish_when_ready(fallback['id'])
                         self.error = str(exc)
                         continue
@@ -562,31 +576,48 @@ class Messaging:
                                             [(self.account, item[0]) for item in batch if item[0] != message[0]])
                         self.db.executemany("UPDATE dm_outbox SET state='cancelled' WHERE account=? AND command_id=? AND state='draft'",
                             [(self.account, 'system-wait-' + hashlib.sha256(item[0].encode()).hexdigest()[:24]) for item in batch])
-                    if auto_send and draft.get('state') == 'draft':
+                    if self.auto_send and draft.get('state') == 'draft':
                         published = await self.publish_when_ready(draft['id'])
                         if published['state'] == 'uncertain':
                             raise RpcError(-32040, 'DM_SEND_UNCERTAIN')
                     count = self.db.execute("SELECT COUNT(*) FROM dm_messages WHERE account=? AND peer=? AND direction='incoming' AND deleted=0", (self.account, peer)).fetchone()[0]
-                    if count >= 6:
-                        await self.summarize(peer)
+                    task = self.memory_tasks.get(peer)
+                    if count - self.memory_counts.get(peer, 0) >= 6 and (task is None or task.done()):
+                        self.memory_tasks[peer] = asyncio.create_task(self.remember_later(peer, count))
+                failures = 0
             except asyncio.CancelledError:
                 self.next_poll_at = None
                 raise
             except RpcError as exc:
                 self.error = str(exc)
                 self.store.event('dm', '私信处理等待恢复', error=self.error)
-                if str(exc) not in {'PLATFORM_BUSY', 'DM_SEND_BUSY', 'DM_SEND_LIMIT'} | RECOVERABLE_MODEL_ERRORS:
+                if str(exc) not in TRANSIENT_PLATFORM_ERRORS | {'DM_SEND_BUSY', 'DM_SEND_LIMIT'} | RECOVERABLE_MODEL_ERRORS:
                     self.state, self.error = 'BLOCKED', str(exc)
                     self.next_poll_at = None
                     self.store.event('dm', '监听已暂停，需要处理错误后重新启动', error=self.error)
                     return
+                failures += 1
             except Exception as exc:
                 self.state, self.error = 'BLOCKED', type(exc).__name__
                 self.next_poll_at = None
                 self.store.event('dm', '监听已暂停，需要处理错误后重新启动', error=self.error)
                 return
-            self.next_poll_at = time.time() + POLL_INTERVAL
-            await asyncio.sleep(POLL_INTERVAL)
+            delay = min(300, POLL_INTERVAL * 2 ** min(failures, 5)) if failures else POLL_INTERVAL
+            self.next_poll_at = time.time() + delay
+            try:
+                await asyncio.wait_for(self.wake.wait(), delay)
+            except TimeoutError:
+                pass
+
+    async def remember_later(self, peer: str, count: int) -> None:
+        """Batch long-term memory updates without delaying the next inbox check."""
+        try:
+            await self.summarize(peer)
+            self.memory_counts[peer] = count
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.store.event('dm', '对话记忆整理失败，后续继续；私信监听保持运行', error=self.safe_error(exc))
 
     async def publish_when_ready(self, draft_id: str) -> dict:
         """Leave rate-limited replies queued while continuing to process incoming requests."""
@@ -606,6 +637,10 @@ class Messaging:
         if self.task and not self.task.done():
             self.task.cancel()
             await asyncio.gather(self.task, return_exceptions=True)
+        for task in self.memory_tasks.values():
+            task.cancel()
+        await asyncio.gather(*self.memory_tasks.values(), return_exceptions=True)
+        self.memory_tasks.clear()
         self.state = 'STOPPED'
         self.next_poll_at = None
         if was_running:

@@ -174,7 +174,7 @@ class MessagingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_background_preview_ignores_old_messages_and_never_sends(self):
         self.platform.inbox = [message('100', age=100), message('101', age=1)]
-        self.dm.task = asyncio.create_task(self.dm.watch(time.time() - 2, False))
+        self.dm.task = asyncio.create_task(self.dm.watch(time.time() - 2))
         async with asyncio.timeout(3):
             while not self.dm.status()['outbox']:
                 await asyncio.sleep(.005)
@@ -290,12 +290,59 @@ class MessagingTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(states, {'100': 'new', '101': 'coalesced', '102': 'drafted'})
             await self.dm.close()
 
-    async def test_running_preview_cannot_silently_ignore_auto_send_request(self):
-        await self.dm.start(auto_send=False)
-        with self.assertRaisesRegex(RpcError, 'STOP_DM_BEFORE_CHANGING_MODE'):
-            await self.dm.start(auto_send=True)
-        self.assertFalse(self.dm.status()['auto_send'])
-        self.assertEqual(self.platform.sent, [])
+    async def test_running_preview_switches_to_auto_without_losing_pending_reply(self):
+        with patch('bili_agent.messaging.POLL_INTERVAL', .005):
+            await self.dm.start(auto_send=False)
+            task = self.dm.task
+            self.platform.inbox = [message(age=0)]
+            async with asyncio.timeout(2):
+                while not self.dm.status()['outbox']:
+                    await asyncio.sleep(.005)
+            self.assertEqual(self.platform.sent, [])
+            await self.dm.start()
+            self.assertTrue(self.dm.status()['auto_send'])
+            self.assertIs(self.dm.task, task)
+            async with asyncio.timeout(2):
+                while not self.platform.sent:
+                    await asyncio.sleep(.005)
+            self.assertEqual(len(self.model.calls), 1)
+            await self.dm.start(auto_send=False)
+            self.assertFalse(self.dm.auto_send)
+
+    async def test_transient_platform_failure_retries_instead_of_stopping_listener(self):
+        original = self.platform.request
+        failed = False
+        async def flaky(operation, params):
+            nonlocal failed
+            if operation == 'sessions' and not failed:
+                failed = True
+                raise RpcError(-32010, 'PLATFORM_REQUEST_FAILED')
+            return await original(operation, params)
+        self.platform.request = flaky
+        with patch('bili_agent.messaging.POLL_INTERVAL', .005):
+            await self.dm.start()
+            self.platform.inbox = [message(age=0)]
+            async with asyncio.timeout(2):
+                while not self.platform.sent:
+                    await asyncio.sleep(.005)
+            self.assertTrue(failed)
+            self.assertEqual(self.dm.state, 'RUNNING')
+
+    async def test_memory_summary_does_not_block_new_inbox_checks(self):
+        entered = asyncio.Event()
+        async def slow_memory(peer):
+            entered.set()
+            await asyncio.Event().wait()
+        self.dm.summarize = slow_memory
+        with patch('bili_agent.messaging.POLL_INTERVAL', .005):
+            await self.dm.start()
+            self.platform.inbox = [message(str(100 + i), age=0) for i in range(6)]
+            await asyncio.wait_for(entered.wait(), 2)
+            previous = self.dm.last_sync
+            async with asyncio.timeout(2):
+                while self.dm.last_sync == previous:
+                    await asyncio.sleep(.005)
+            self.assertEqual(self.dm.state, 'RUNNING')
 
     async def test_auto_reply_waits_when_another_sender_owns_the_send_lock(self):
         original = self.dm.publish

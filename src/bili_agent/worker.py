@@ -207,7 +207,7 @@ class Runtime:
         if method == 'dm.start':
             self.automation.dm_paused = False
             self.automation.start_attempted = True
-            return await self.messaging.start(params.get('auto_send', False))
+            return await self.messaging.start(params.get('auto_send'))
         if method == 'dm.stop':
             self.automation.dm_paused = True
             await self.messaging.close()
