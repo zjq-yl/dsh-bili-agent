@@ -14,7 +14,7 @@ DEFAULTS = {'dm_auto_start': True, 'scheduled': True, 'start_time': '18:00', 'en
             'rounds': 3, 'per_round': 5, 'request_enabled': True, 'actions_enabled': True,
             'proactive_enabled': True, 'share_cards': True, 'favorite_folder': '',
             'max_video_seconds': 600, 'comments_enabled': True, 'comment_daily_limit': 3,
-            'discovery_source': 'popular_first'}
+            'discovery_source': 'popular_first', 'mentions_enabled': True}
 TRANSIENT = {'MODEL_BUSY', 'PLATFORM_BUSY', 'DM_SEND_BUSY', 'DM_SEND_LIMIT'}
 
 
@@ -98,7 +98,7 @@ class VideoAgent:
         config = {**self.config, **value}
         if config['discovery_source'] not in ('popular_first', 'search'):
             raise RpcError(-32602, 'INVALID_AUTOMATION_CONFIG')
-        for key in ('dm_auto_start', 'scheduled', 'request_enabled', 'actions_enabled', 'proactive_enabled', 'share_cards', 'comments_enabled'):
+        for key in ('dm_auto_start', 'scheduled', 'request_enabled', 'actions_enabled', 'proactive_enabled', 'share_cards', 'comments_enabled', 'mentions_enabled'):
             if type(config[key]) is not bool:
                 raise RpcError(-32602, 'INVALID_AUTOMATION_CONFIG')
         start, end = minutes(config['start_time']), minutes(config['end_time'])

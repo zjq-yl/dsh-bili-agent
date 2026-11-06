@@ -17,6 +17,11 @@ const state = {
 }
 
 state.agents = { video: { state: 'RUNNING' }, interaction: { state: 'RUNNING', comments: [] } }
+state.automation.config.mentions_enabled = true
+state.agents.interaction.mentions = { items: [
+  { id: '501', peer: '200', bvid: 'BV0000000001', created: Date.now() / 1000, state: 'waiting_video' },
+  { id: '502', peer: '200', bvid: 'BV0000000002', created: Date.now() / 1000 - 30, state: 'failed', error: 'MENTION_CONTEXT_CHANGED' },
+] }
 state.automation.jobs[0].created = Date.now() / 1000 - 60
 state.automation.jobs.push(
   { id: 9, kind: 'scheduled', keyword: '热门视频与科技动态', state: 'complete', created: Date.now() / 1000 - 3600, round_index: 3, rounds: 3, videos: [], deliveries: [] },
@@ -37,6 +42,7 @@ const panel = await startPanel({ async call(method, params) {
   if (method === 'friends.lookup') return { peer: params.peer_uid, kind: 'mutual' }
   if (method === 'friends.contact') contacts.followers[0].connection = { state: params.action === 'decline' ? 'declined' : 'pending' }
   if (method === 'friends.message') { actions.push({ method, params }); return { state: 'sent' } }
+  if (method === 'mentions.retry') state.agents.interaction.mentions.items.find(x => x.id === params.id).state = 'queued'
   if (method === 'library.list') {
     const found = items.filter(item => item.title.includes(params.query || '') && (!params.rating || item.assessment.rating === params.rating))
     return { items: found.slice(params.offset, params.offset + params.limit), total: found.length, counts: { all: items.length, '值得看': 6, '可以看': 10, '没必要看': 0, unrated: 0 } }
@@ -246,6 +252,14 @@ try {
   await until("document.getElementById('friends').textContent.includes('已暂停好友流程')")
   await evaluate("[...document.querySelectorAll('#friends button')].find(x=>x.textContent==='编辑档案').click()")
   assert.equal(await evaluate("document.getElementById('friend-connect').checked"), false, 'editing must not follow again')
+  await navigate('actions')
+  assert.equal(await evaluate("document.getElementById('auto-mentions').checked"), true)
+  await until("document.getElementById('mention-list').textContent.includes('等待视频分析')")
+  await evaluate("document.querySelector('#mention-list details[data-id=\"502\"] summary').click()")
+  await screenshot('mentions-desktop')
+  await evaluate("document.querySelector('#mention-list details[data-id=\"502\"] button').click()")
+  await until("document.querySelector('#mention-list details[data-id=\"502\"]').textContent.includes('等待核实与理解')")
+  assert.ok(actions.some(x => x.method === 'mentions.retry' && x.params.id === '502'))
   for (const width of [390, 360]) {
     await call('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: false }, sessionId)
     for (const id of ['overview', 'videos', 'automation', 'messages', 'friends-section', 'actions', 'persona', 'logs']) {

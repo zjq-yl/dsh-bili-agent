@@ -81,7 +81,8 @@ class Platform:
                                 "identity": self.identity, "sessions": self.sessions, "messages": self.messages,
                                 "send_dm": self.send_dm, "share_video": self.share_video, 'send_comment': self.send_comment,
                                 "video_action": self.video_action, "favorite_folders": self.favorite_folders,
-                                'relation': self.relation, 'follow': self.follow, 'contacts': self.contacts}
+                                'relation': self.relation, 'follow': self.follow, 'contacts': self.contacts,
+                                'mentions': self.mentions, 'mention_context': self.mention_context}
                     if operation not in handlers:
                         raise RpcError(-32601, "UNKNOWN_PLATFORM_OPERATION")
                     result = await handlers[operation](params)
@@ -224,11 +225,16 @@ class Platform:
                 or not isinstance(bvid, str) or not re.fullmatch(r'BV[0-9A-Za-z]{10}', bvid)):
             raise RpcError(-32602, 'INVALID_PUBLIC_COMMENT')
         credential = self.credential()
+        thread = {}
+        if params.get('root') is not None or params.get('parent') is not None:
+            if any(not re.fullmatch(r'[1-9][0-9]{0,39}', str(params.get(key, ''))) for key in ('root', 'parent')):
+                raise RpcError(-32602, 'INVALID_COMMENT_THREAD')
+            thread = {key: int(params[key]) for key in ('root', 'parent')}
         previous = request_settings.get_wbi_retry_times()
         request_settings.set_wbi_retry_times(1)
         try:
             response = await comment.send_comment(text.strip(), video.Video(bvid=bvid).get_aid(),
-                comment.CommentResourceType.VIDEO, credential=credential)
+                comment.CommentResourceType.VIDEO, credential=credential, **thread)
             # Community receipt handling references are recorded in THIRD-PARTY-NOTICES.md.
             if not isinstance(response, dict):
                 raise RpcError(-32040, 'COMMENT_RECEIPT_MISSING')
@@ -243,6 +249,36 @@ class Platform:
             return {'rpid': rpid}
         finally:
             request_settings.set_wbi_retry_times(previous)
+
+    async def mentions(self, params: dict) -> dict:
+        """Read one SDK @notification page without marking anything read."""
+        from bilibili_api import session
+        return await session.get_at(self.credential(), last_id=params.get('id'), at_time=params.get('time'))
+
+    async def mention_context(self, params: dict) -> dict:
+        """Verify the comment author and thread against the video comment API before replying."""
+        from bilibili_api import comment, video
+        for key in ('oid', 'root', 'parent', 'peer'):
+            if not re.fullmatch(r'[1-9][0-9]{0,39}', str(params.get(key, ''))):
+                raise RpcError(-32602, 'INVALID_COMMENT_THREAD')
+        target = comment.Comment(int(params['oid']), comment.CommentResourceType.VIDEO,
+                                 int(params['root']), credential=self.credential())
+        for page in range(1, 6):
+            data = await target.get_sub_comments(page_index=page, page_size=20)
+            root = data.get('root') or {}
+            replies = data.get('replies') or []
+            for row in [root, *replies]:
+                if str(row.get('rpid')) != str(params['parent']):
+                    continue
+                if (str(row.get('mid')) != str(params['peer']) or str(row.get('oid')) != str(params['oid'])
+                        or row.get('type') != 1 or str(row.get('root') or row['rpid']) != str(params['root'])):
+                    raise RpcError(-32040, 'MENTION_CONTEXT_MISMATCH')
+                return {'bvid': video.Video(aid=int(params['oid'])).get_bvid(),
+                        'text': str(row.get('content', {}).get('message', ''))[:4000],
+                        'root_text': str(root.get('content', {}).get('message', ''))[:4000]}
+            if len(replies) < 20:
+                break
+        raise RpcError(-32040, 'MENTION_COMMENT_UNAVAILABLE')
 
     async def video_part(self, params):
         bvid, page = params.get("bvid"), params.get("page", 1)

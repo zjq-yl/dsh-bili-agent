@@ -13,6 +13,31 @@ from bili_agent.protocol import RpcError
 
 
 class PlatformTests(unittest.IsolatedAsyncioTestCase):
+    async def test_mention_context_checks_author_and_send_uses_root_parent(self):
+        root = {'rpid': 100, 'oid': 170001, 'mid': 33, 'type': 1, 'root': 0, 'content': {'message': '公开上下文'}}
+        reply = {'rpid': 101, 'oid': 170001, 'mid': 22, 'type': 1, 'root': 100, 'content': {'message': '@角色 你好'}}
+        comments = AsyncMock(return_value={'root': root, 'replies': [reply]})
+        send = AsyncMock(return_value={'rpid': 900})
+        sdk = SimpleNamespace(comment=SimpleNamespace(Comment=Mock(return_value=SimpleNamespace(get_sub_comments=comments)),
+            send_comment=send, CommentResourceType=SimpleNamespace(VIDEO=1)),
+            video=SimpleNamespace(Video=Mock(return_value=SimpleNamespace(get_bvid=lambda: 'BV17x411w7KC', get_aid=lambda: 170001))))
+        settings = SimpleNamespace(get_wbi_retry_times=Mock(return_value=3), set_wbi_retry_times=Mock())
+        with tempfile.TemporaryDirectory() as directory, patch.dict(sys.modules, {
+                'bilibili_api': sdk, 'bilibili_api.utils': SimpleNamespace(),
+                'bilibili_api.utils.network': SimpleNamespace(request_settings=settings)}):
+            platform = Platform(Path(directory))
+            platform.credential = lambda: 'test'
+            params = {'oid': '170001', 'root': '100', 'parent': '101', 'peer': '22'}
+            context = await platform.mention_context(params)
+            self.assertEqual(context['root_text'], '公开上下文')
+            await platform.send_comment({'bvid': context['bvid'], 'text': '你好', 'root': '100', 'parent': '101'})
+            self.assertEqual(send.call_args.kwargs['root'], 100)
+            self.assertEqual(send.call_args.kwargs['parent'], 101)
+            with self.assertRaisesRegex(RpcError, 'MENTION_CONTEXT_MISMATCH'):
+                await platform.mention_context({**params, 'peer': '44'})
+            with self.assertRaisesRegex(RpcError, 'MENTION_COMMENT_UNAVAILABLE'):
+                await platform.mention_context({**params, 'parent': '102'})
+
     async def test_contact_lists_classification_pagination_and_invalid_payload(self):
         mutual = AsyncMock(return_value={'list': [{'mid': n, 'uname': f'好友{n}', 'attribute': 6} for n in range(100, 151)]})
         followers = AsyncMock(return_value={'list': [

@@ -14,6 +14,7 @@ const methods = new Set([
   'dm.start', 'dm.stop', 'dm.memory', 'dm.summarize',
   'friends.status', 'friends.save', 'friends.preferences', 'friends.feedback', 'friends.connect', 'friends.connection',
   'friends.directory', 'friends.lookup', 'friends.contact', 'friends.message',
+  'mentions.retry',
   'automation.status', 'automation.configure', 'automation.folders', 'automation.retry_review',
 ])
 const usesModel = new Set(['model.check', 'agent.start', 'dm.reply', 'dm.start', 'dm.summarize', 'automation.retry_review'])

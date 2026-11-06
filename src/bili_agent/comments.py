@@ -49,9 +49,11 @@ class Comments:
     def can_send(self) -> bool:
         now = datetime.now(timezone(timedelta(hours=8)))
         midnight = now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-        used = self.db.execute('SELECT COUNT(*) FROM public_comments WHERE account=? AND attempted>=?',
-                              (self.agent.dm.account, midnight)).fetchone()[0]
-        last = self.db.execute('SELECT MAX(attempted) FROM public_comments WHERE account=?', (self.agent.dm.account,)).fetchone()[0]
+        attempts = list(self.db.execute('''SELECT attempted FROM public_comments WHERE account=? AND attempted>=?
+            UNION ALL SELECT attempted FROM mentions WHERE account=? AND attempted>=?''',
+            (self.agent.dm.account, midnight - 60, self.agent.dm.account, midnight - 60)))
+        used = sum(row[0] >= midnight for row in attempts)
+        last = max((row[0] for row in attempts), default=None)
         return used < self.agent.config['comment_daily_limit'] and (last is None or time.time() - last >= 60)
 
     async def tick(self) -> None:

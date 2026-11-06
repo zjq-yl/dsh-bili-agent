@@ -76,6 +76,7 @@ Object.assign(errors, { RECOMMENDATIONS_PAUSED: '主动推荐已暂停', RECOMME
 Object.assign(errors, { INVALID_AUTOMATION_CONFIG: '自动运行设置超出允许范围。', AUTOMATION_WINDOW_MUST_BE_SAME_DAY: '结束时间需晚于开始时间，目前支持同一天的时段。', INVALID_VIDEO_DECISION: '视频评价格式不合规，未执行动作。', DISLIKE_REQUIRES_APP_TOKEN: '缺少 App 凭据：仅在本地记为不喜欢。', FAVORITE_FOLDER_REQUIRED: '没有找到默认收藏夹，请在公开互动页选择收藏夹。', CARD_REASON_NOT_SENT: '请先发送该卡片对应的推荐理由。', RECOMMENDATION_REQUEST_LIMIT: '推荐检索请求已达到频率限制。' })
 Object.assign(errors, { FRIEND_NOT_MUTUAL: '好友流程未启用或尚未确认互关，暂不发送', FRIEND_GREETING_PENDING: '消息已保留，等待招呼确认发送后继续发送', FRIEND_RELATION_BLOCKED: '存在拉黑关系，请先在 B 站核对', FOLLOW_NOT_CONFIRMED: '未确认关注成功；核对平台后可重试关注', INVALID_RELATION_RESPONSE: '平台关系数据不完整，稍后重新检查', FRIEND_CONNECTION_LIMIT: '当前最多管理 100 个关注流程', FRIEND_CONNECTION_BUSY: '正在处理关注，请稍后重试', INVALID_FRIEND_CONNECTION_ACTION: '未找到对应的好友流程', DM_CSRF_REQUIRED: '账号凭据缺少 bili_jct，暂时无法发送私信' })
 Object.assign(errors, { FRIEND_ADD_REQUIRED: '尚未互关：消息已保留，先添加好友，确认后继续发送', FRIEND_CONNECTION_PAUSED: '你已暂停该对象的流程或选择不回关，消息没有发送', CONTACT_NOT_FOLLOWER: '对方当前不是可回关的粉丝，请刷新关系', INVALID_CONTACT_PAGE: '关系分类或页码不正确' })
+Object.assign(errors, { INVALID_MENTION_RESPONSE: '平台提及通知格式不完整，等待重新读取', MENTION_NOT_FRIEND: '对方不是互关好友，或已暂停该对象的互动', MENTION_CONTEXT_MISMATCH: '评论作者或楼层无法核实，未发送', MENTION_COMMENT_UNAVAILABLE: '未找到原评论；可能已删除，或超出本次读取范围', MENTION_CONTEXT_CHANGED: '原评论内容已变化，请重试处理', INVALID_MENTION_REPLY: '生成的公开回复格式不正确，可重试处理', MENTION_VIDEO_FAILED: '视频分析失败，可检查视频任务后重试' })
 function validationDetail(detail) {
   if (!detail) return ''
   const reasons = { invalid_json: '不是有效的 JSON', object_required: '需要 JSON 对象', string_required: '需要文本', array_required: '需要列表', length: '字符数不符合限制', count: '条数不符合限制', integer_ids_required: '证据 ID 必须是整数', unknown_ids: '引用了本轮不存在的证据 ID', invalid_reflection: '视频感受的分类、长度、评分或证据不合规' }
@@ -624,7 +625,7 @@ function ratingBadge(rating) {
 const autoFields = { discovery_source: 'auto-source', scheduled: 'auto-scheduled', dm_auto_start: 'auto-dm', request_enabled: 'auto-request',
   proactive_enabled: 'auto-proactive', share_cards: 'auto-share', actions_enabled: 'auto-actions',
   start_time: 'auto-start', end_time: 'auto-end', rounds: 'auto-rounds', per_round: 'auto-per-round',
-  favorite_folder: 'auto-folder', max_video_seconds: 'auto-duration', comments_enabled: 'auto-comments', comment_daily_limit: 'auto-comment-limit' }
+  favorite_folder: 'auto-folder', max_video_seconds: 'auto-duration', comments_enabled: 'auto-comments', comment_daily_limit: 'auto-comment-limit', mentions_enabled: 'auto-mentions' }
 // Preview only: the worker still validates and schedules the saved plan.
 function previewSchedule() {
   const start = $('auto-start'), end = $('auto-end'), rounds = $('auto-rounds'), count = $('auto-per-round')
@@ -734,7 +735,7 @@ $('library-next').onclick = () => { libraryOffset += libraryPageSize; void loadL
 for (const [formId, keys] of Object.entries({
   'automation-form': ['discovery_source', 'scheduled', 'start_time', 'end_time', 'rounds', 'per_round', 'max_video_seconds', 'proactive_enabled', 'share_cards'],
   'chat-settings-form': ['dm_auto_start', 'request_enabled'],
-  'interaction-settings-form': ['actions_enabled', 'favorite_folder', 'comments_enabled', 'comment_daily_limit'],
+  'interaction-settings-form': ['actions_enabled', 'favorite_folder', 'comments_enabled', 'comment_daily_limit', 'mentions_enabled'],
 })) form(formId, async () => {
   const config = Object.fromEntries(keys.map(key => {
     const input = $(autoFields[key])
@@ -772,6 +773,25 @@ function renderLive(data) {
   $('workspace-date').textContent = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long', timeZone: 'Asia/Shanghai' }).format(new Date())
   const commentStates = { queued: '等待判断', analyzing: '判断是否评论', planned: '等待发表', skipped: '决定不评论', sent: '已发表', uncertain: '待核对，不重发', failed: '生成失败', cancelled: '已取消' }
   const comments = agents.interaction?.comments || []
+  const mentions = agents.interaction?.mentions || { items: [] }
+  $('mention-health').textContent = !config.mentions_enabled ? '监听已关闭' : mentions.error ? explain(mentions.error) : `约每 30 秒检查 · 仅互关好友${mentions.send_blocked ? ` · ${mentions.send_blocked === 'COMMENT_SEND_LIMIT' ? '等待公开评论额度或发送间隔' : explain(mentions.send_blocked)}` : ''}`
+  const mentionVersion = JSON.stringify(mentions.items)
+  if ($('mention-list').dataset.version !== mentionVersion) {
+    $('mention-list').dataset.version = mentionVersion
+    const opened = new Set([...$('mention-list').querySelectorAll('details[open]')].map(item => item.dataset.id))
+    const states = { queued: '等待核实与理解', waiting_video: '等待视频分析', planned: '等待发送条件', sent: '已回复原评论', ignored: '非互关或已暂停，忽略', failed: '处理失败，可重试', uncertain: '发送待核对，不重发', sending: '正在发送' }
+    $('mention-list').replaceChildren(...mentions.items.map(item => {
+      const row = document.createElement('details'); row.className = 'editor-panel'; row.dataset.id = item.id; row.open = opened.has(item.id)
+      row.append(text('summary', `${new Date(item.created * 1000).toLocaleString()} · UID ${item.peer} · ${states[item.state] || item.state}`))
+      if (item.bvid) row.append(videoLink(item.bvid))
+      row.append(text('p', item.text || '尚未生成回复', 'subtle'))
+      if (item.error) row.append(text('p', explain(item.error), 'error'))
+      if (item.receipt) row.append(text('small', `评论回执：${item.receipt}`, 'subtle'))
+      if (item.state === 'failed') row.append(button('重试处理', async () => { await call('mentions.retry', { id: item.id }); notice('已重新安排提及处理。') }))
+      return row
+    }))
+    if (!mentions.items.length) $('mention-list').append(text('p', '暂无新的评论区提及。启动监听之前的历史通知不会自动回复。', 'empty'))
+  }
   const commentsVersion = JSON.stringify(comments)
   if ($('public-comments').dataset.version !== commentsVersion) {
     $('public-comments').dataset.version = commentsVersion

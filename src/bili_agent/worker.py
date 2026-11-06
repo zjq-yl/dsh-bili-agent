@@ -77,6 +77,8 @@ class Runtime:
             return {'updated': True, 'has_cover': bool(clean['cover'])}
         if method == 'automation.status':
             return self.automation.status()
+        if method == 'mentions.retry':
+            return self.automation.interaction.mentions.retry(params.get('id'))
         if method == 'automation.retry_review':
             return self.automation.retry_review(params.get('video_id'))
         if method == 'automation.configure':

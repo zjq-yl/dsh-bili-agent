@@ -6,6 +6,7 @@ import sqlite3
 
 from .protocol import RpcError
 from .comments import Comments
+from .mentions import Mentions
 
 
 class InteractionAgent:
@@ -19,6 +20,7 @@ class InteractionAgent:
         self.wake = asyncio.Event()
         self.task, self.error, self.activity = None, None, None
         self.comments = Comments(self)
+        self.mentions = Mentions(self)
 
     @property
     def config(self) -> dict:
@@ -37,7 +39,7 @@ class InteractionAgent:
     def status(self) -> dict:
         return {'name': '聊天 Agent', 'state': 'RUNNING' if self.task and not self.task.done() else 'STOPPED',
                 'error': self.error, 'activity': self.activity, 'chat': self.dm.state,
-                'proactive_video_push': False, 'comments': self.comments.status(),
+                'proactive_video_push': False, 'comments': self.comments.status(), 'mentions': self.mentions.status(),
                 'comments_enabled': self.config['comments_enabled'], 'comment_daily_limit': self.config['comment_daily_limit']}
 
     def prepare_results(self) -> None:
@@ -185,7 +187,7 @@ class InteractionAgent:
         self.prepare_results()
         self.update_deliveries()
         self.error = None
-        for action in (self.send_pending, self.perform_action, self.comments.tick):
+        for action in (self.send_pending, self.perform_action, self.mentions.tick, self.comments.tick):
             try:
                 await action()
             except RpcError as exc:
