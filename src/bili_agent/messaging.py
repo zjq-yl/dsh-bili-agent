@@ -410,6 +410,8 @@ class Messaging:
                 raise RpcError(-32602, 'DRAFT_NOT_FOUND')
             if row['state'] != 'draft':
                 return dict(row)
+            if self.friends and self.friends.cancel_duplicate(row):
+                return dict(self.db.execute('SELECT * FROM dm_outbox WHERE id=?', (draft_id,)).fetchone())
             if row['depends_on']:
                 parent = self.db.execute('SELECT state FROM dm_outbox WHERE id=? AND account=?', (row['depends_on'], self.account)).fetchone()
                 if not parent or parent['state'] != 'sent':

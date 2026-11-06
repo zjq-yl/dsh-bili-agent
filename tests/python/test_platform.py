@@ -13,6 +13,22 @@ from bili_agent.protocol import RpcError
 
 
 class PlatformTests(unittest.IsolatedAsyncioTestCase):
+    async def test_popular_feed_uses_sdk_and_normalizes_candidates(self):
+        hot = SimpleNamespace(get_hot_videos=AsyncMock(return_value={'list': [
+            {'bvid': 'BV17x411w7KC', 'title': '热门视频', 'duration': 100, 'owner': {'mid': 123, 'name': 'UP'}},
+            {'bvid': 'invalid'}, None]}))
+        with tempfile.TemporaryDirectory() as directory, patch.dict(sys.modules, {'bilibili_api': SimpleNamespace(hot=hot)}):
+            platform = Platform(Path(directory))
+            result = await platform.request('popular', {'page': 2, 'limit': 20})
+            hot.get_hot_videos.assert_awaited_once_with(pn=2, ps=20)
+            self.assertEqual(result['source'], 'bilibili_popular')
+            self.assertEqual(len(result['candidates']), 1)
+            self.assertEqual(result['candidates'][0]['author_uid'], '123')
+            self.assertEqual(result['candidates'][0]['duration'], 100)
+            for invalid in ({'page': True}, {'limit': 21}, {'page': 0}):
+                with self.assertRaisesRegex(RpcError, 'INVALID_SEARCH_PAGE'):
+                    await platform.popular(invalid)
+
     async def test_public_comment_uses_video_resource_and_returns_receipt(self):
         send = AsyncMock(return_value={'rpid': 123456})
         settings = SimpleNamespace(get_wbi_retry_times=Mock(return_value=3), set_wbi_retry_times=Mock())
@@ -29,6 +45,36 @@ class PlatformTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(send.call_args.args[1:], (170001, 1))
             self.assertIs(send.call_args.kwargs['credential'], credential)
             self.assertEqual([call.args[0] for call in settings.set_wbi_retry_times.call_args_list], [1, 3])
+
+            for receipt in ({'rpid_str': '12345678901234567890', 'rpid': 123},
+                            {'reply': {'rpid_str': '12345678901234567890'}}):
+                send.return_value = receipt
+                self.assertEqual(await platform.send_comment({'bvid': 'BV17x411w7KC', 'text': '测试正文'}),
+                                 {'rpid': '12345678901234567890'})
+            for receipt, error in [({'need_captcha': 1, 'rpid': 123}, 'PLATFORM_CHALLENGE'),
+                                   ({'reply': 'invalid'}, 'COMMENT_RECEIPT_MISSING'),
+                                   ({'rpid': 0}, 'COMMENT_RECEIPT_MISSING'),
+                                   (None, 'COMMENT_RECEIPT_MISSING')]:
+                send.return_value = receipt
+                send.reset_mock()
+                with self.assertRaisesRegex(RpcError, error):
+                    await platform.send_comment({'bvid': 'BV17x411w7KC', 'text': '测试正文'})
+                self.assertEqual(send.await_count, 1)  # Never replay a possibly accepted write.
+                self.assertEqual(settings.set_wbi_retry_times.call_args.args, (3,))
+
+    async def test_platform_risk_codes_are_reported_for_interactions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            platform = Platform(Path(directory))
+            for operation in ('send_comment', 'video_action'):
+                for code in (-352, -412):
+                    error = Exception('platform risk response')
+                    error.code = code
+                    handler = AsyncMock(side_effect=error)
+                    setattr(platform, operation, handler)
+                    platform.next_request = 0
+                    with self.assertRaisesRegex(RpcError, '^PLATFORM_CHALLENGE$'):
+                        await platform.request(operation, {})
+                    handler.assert_awaited_once()
 
     async def test_slow_video_fetch_does_not_hold_private_message_lane(self):
         with tempfile.TemporaryDirectory() as directory:

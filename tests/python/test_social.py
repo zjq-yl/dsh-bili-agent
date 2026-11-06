@@ -1,4 +1,5 @@
 import asyncio
+import json
 import tempfile
 import unittest
 from datetime import datetime
@@ -37,6 +38,44 @@ class SocialTests(unittest.IsolatedAsyncioTestCase):
         return self.social.save({'peer_uid': peer, 'name': '好友', 'category': '学习伙伴',
                                  'interests': ['知识'], 'style': '简洁直接',
                                  'preferences': {'push_start': '00:00', 'push_end': '00:00'}, **changes})
+
+    async def test_recommendations_share_recipient_history_and_survive_restart(self):
+        video_id = await self.video()
+        result = json.loads(self.store.db.execute('SELECT result FROM videos WHERE id=?', (video_id,)).fetchone()[0])
+        first = self.social.recommend('22', video_id, result, '推荐理由', request_id=1)
+        second = self.social.recommend('22', video_id, result, '另一理由', request_id=2)
+        self.assertEqual(first, second)
+        self.assertFalse(self.social.can_recommend('22', result))
+        self.assertTrue(self.social.can_recommend('33', result))
+        with self.store.db:
+            self.store.db.execute("UPDATE dm_outbox SET state='uncertain' WHERE id=?", (first,))
+        restarted = Social(self.store, self.dm)
+        self.assertEqual(restarted.recommend('22', video_id, result, '主动推荐', share=True), first)
+        self.assertFalse(restarted.can_recommend('22', result))
+        self.assertEqual(self.store.db.execute('SELECT COUNT(*) FROM dm_outbox').fetchone()[0], 1)
+        account = self.dm.account
+        self.dm.account = '999'
+        self.assertTrue(restarted.can_recommend('22', result))
+        self.dm.account = account
+
+    async def test_legacy_duplicates_are_backfilled_and_blocked_before_send(self):
+        video_id = await self.video()
+        result = json.loads(self.store.db.execute('SELECT result FROM videos WHERE id=?', (video_id,)).fetchone()[0])
+        first = self.dm.compose('22', '已发的推荐', f'req-1-{video_id}-22')['id']
+        duplicate = self.dm.compose('22', '另一请求的重复推荐', f'req-2-{video_id}-22')['id']
+        card = self.dm.compose_card('22', result['bvid'], duplicate, f'req-card-2-{video_id}-22')['id']
+        with self.store.db:
+            self.store.db.execute("UPDATE dm_outbox SET state='sent' WHERE id=?", (first,))
+            self.store.db.execute('DROP INDEX dm_recommendation_history')
+            self.store.db.execute('ALTER TABLE dm_outbox DROP COLUMN recommendation_bvid')
+        self.social = Social(self.store, self.dm)
+        self.dm.friends = self.social
+        self.assertFalse(self.social.can_recommend('22', result))
+        cancelled = await self.dm.publish(duplicate)
+        self.assertEqual((cancelled['state'], cancelled['error']), ('cancelled', 'DUPLICATE_RECOMMENDATION'))
+        self.assertEqual(self.store.db.execute('SELECT state FROM dm_outbox WHERE id=?', (card,)).fetchone()[0], 'cancelled')
+        self.assertEqual(self.platform.sent, [])
+
 
     async def video(self, cid='1'):
         key = self.runner.enqueue(sample(cid))['id']

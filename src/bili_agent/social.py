@@ -55,6 +55,47 @@ class Social:
                 account TEXT NOT NULL,peer TEXT NOT NULL,bvid TEXT NOT NULL,kind TEXT NOT NULL,
                 created REAL NOT NULL,PRIMARY KEY(account,peer,bvid,kind));
         """)
+        if 'recommendation_bvid' not in {row[1] for row in self.db.execute('PRAGMA table_info(dm_outbox)')}:
+            with self.db:
+                self.db.execute('ALTER TABLE dm_outbox ADD COLUMN recommendation_bvid TEXT')
+                # Recover structured video identities from legacy command keys, not chat prose.
+                for row in self.db.execute("SELECT id,command_id FROM dm_outbox WHERE card_bvid IS NULL AND command_id IS NOT NULL").fetchall():
+                    command = row['command_id']
+                    proactive = re.fullmatch(r'rec-(BV[0-9A-Za-z]{10})-[0-9]+', command)
+                    requested = re.fullmatch(r'req-[0-9]+-([0-9]+)-[0-9]+', command)
+                    video = self.db.execute('SELECT bvid FROM videos WHERE id=?', (int(requested[1]),)).fetchone() if requested else None
+                    bvid = proactive[1] if proactive else video[0] if video else None
+                    if bvid:
+                        self.db.execute('UPDATE dm_outbox SET recommendation_bvid=? WHERE id=?', (bvid, row['id']))
+        self.db.execute('CREATE INDEX IF NOT EXISTS dm_recommendation_history ON dm_outbox(account,peer,recommendation_bvid)')
+
+    def previous_recommendation(self, peer: str, bvid: str) -> sqlite3.Row | None:
+        """Find the durable delivery or reservation shared by all recommendation routes."""
+        return self.db.execute("""SELECT * FROM dm_outbox WHERE account=? AND peer=? AND recommendation_bvid=?
+            AND state IN ('draft','sending','sent','uncertain')
+            ORDER BY CASE WHEN state='draft' THEN 1 ELSE 0 END,created,rowid LIMIT 1""",
+            (self.messaging.account, peer, bvid)).fetchone()
+
+    def can_recommend(self, peer: str, video: dict, max_seconds: int | None = None, request_id: int | None = None) -> bool:
+        """Select only suitable videos not already sent, reserved or awaiting receipt verification."""
+        previous = self.previous_recommendation(peer, video.get('bvid', ''))
+        own_request = previous and request_id is not None and (previous['command_id'] or '').startswith(f'req-{request_id}-')
+        return self.matches(peer, video, max_seconds) and (previous is None or bool(own_request))
+
+    def cancel_duplicate(self, draft: sqlite3.Row) -> bool:
+        """Recheck legacy queued text under the shared send lock; never replay an uncertain send."""
+        parent = self.db.execute('SELECT * FROM dm_outbox WHERE account=? AND id=?',
+                                (self.messaging.account, draft['depends_on'])).fetchone() if draft['depends_on'] else draft
+        if not parent or not parent['recommendation_bvid']:
+            return False
+        previous = self.previous_recommendation(draft['peer'], parent['recommendation_bvid'])
+        if not previous or previous['id'] == parent['id']:
+            return False
+        with self.db:
+            self.db.execute("UPDATE dm_outbox SET state='cancelled',error='DUPLICATE_RECOMMENDATION' WHERE state='draft' AND (id=? OR depends_on=?)",
+                            (draft['id'], draft['id']))
+        self.messaging.store.event('recommendation', '已拦截重复推荐', parent['recommendation_bvid'], 'DUPLICATE_RECOMMENDATION')
+        return True
 
     def preferences(self, peer: str) -> dict:
         """Read recipient-owned preferences independently from delivery permissions."""
@@ -261,8 +302,11 @@ class Social:
 
     def recommend(self, peer: str, video_id: int, result: dict, reason: str, share: bool = False,
                   request_id: int | None = None) -> str:
-        """Deduplicate proactive recommendations per video, explicit replies per request."""
+        """Reserve one video per recipient across proactive pushes and all explicit requests."""
         account = self.messaging.require_account()
+        previous = self.previous_recommendation(peer, result['bvid'])
+        if previous:
+            return previous['id']
         point = (result.get('evidence') or [None])[0]
         evidence = ''
         if point:
@@ -284,6 +328,8 @@ class Social:
         body = prefix + excerpt + suffix
         if request_id is not None:
             draft_id = self.messaging.compose(peer, body, f"req-{request_id}-{video_id}-{peer}")['id']
+            with self.db:
+                self.db.execute('UPDATE dm_outbox SET recommendation_bvid=? WHERE id=?', (result['bvid'], draft_id))
             if share:
                 self.messaging.compose_card(peer, result['bvid'], draft_id, f"req-card-{request_id}-{video_id}-{peer}")
             return draft_id
@@ -296,6 +342,7 @@ class Social:
             with self.db:
                 self.db.execute('INSERT INTO recommendations VALUES(?,?,?,?,?,?,?) ON CONFLICT(account,peer,bvid) DO UPDATE SET reason=excluded.reason,draft_id=excluded.draft_id',
                     (account, peer, result['bvid'], video_id, reason, draft_id, time.time()))
+                self.db.execute('UPDATE dm_outbox SET recommendation_bvid=? WHERE id=?', (result['bvid'], draft_id))
         if share:
             self.messaging.compose_card(peer, result['bvid'], draft_id, f"card-{result['bvid']}-{peer}")
         if not existing or not existing['draft_id']:
@@ -355,12 +402,14 @@ class Social:
             haystack = ' '.join([row['topic'], result['title'], result['summary'], *(fact['text'] for fact in result['facts'])]).casefold()
             matches = [term for term in friend['interests'] if term.casefold() in haystack]
             reason, draft_id = '兴趣未匹配或没有正面感受', None
-            if row['valence'] > 0 and matches:
+            if row['valence'] > 0 and matches and self.can_recommend(row['peer'], result):
                 reason = '这段内容提到了你感兴趣的' + '、'.join(matches[:3]) + '，觉得你可能会喜欢。'
                 summary = result['summary'][:400] + ('…' if len(result['summary']) > 400 else '')
                 body = f"推荐给你：{result['title'][:80]}\n{reason}\n\n内容摘记：{summary}\n\nhttps://www.bilibili.com/video/{row['bvid']}/"
                 draft = self.messaging.compose(row['peer'], body, f"rec-{row['bvid']}-{row['peer']}")
                 draft_id = draft['id']
+                with self.db:
+                    self.db.execute('UPDATE dm_outbox SET recommendation_bvid=? WHERE id=?', (row['bvid'], draft_id))
             with self.db:
                 self.db.execute('INSERT OR IGNORE INTO recommendations VALUES(?,?,?,?,?,?,?)',
                                 (account, row['peer'], row['bvid'], row['id'], reason, draft_id, time.time()))

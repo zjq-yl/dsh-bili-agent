@@ -185,16 +185,17 @@ export function registerTools(
   ctx.tools.register(defineTool({
     name: 'bili_agent_automation', description: '查看或设置开机私信监听、北京时间刷视频时段、每轮数量、三档评价、自动推荐与点赞收藏开关。只按账号主人要求改配置。',
     parameters: {
-      action: { type: 'string', required: true, description: 'status/configure/folders' },
-      config_json: { type: 'string', description: 'configure的JSON配置：dm_auto_start、scheduled、start_time、end_time、rounds、per_round、request_enabled、actions_enabled、proactive_enabled、share_cards、favorite_folder、max_video_seconds、comments_enabled、comment_daily_limit（0至10，默认3）；省略字段保持原值。视频Agent主动推荐，聊天Agent负责好友点播及公开评论。' },
+      action: { type: 'string', required: true, description: 'status/configure/folders/retry_review；retry_review仅重新评价失败的视频，不重跑总结' },
+      video_id: { type: 'integer', description: 'retry_review的失败评价视频ID' },
+      config_json: { type: 'string', description: 'configure的JSON配置：discovery_source（popular_first热门优先，search兴趣搜索）、dm_auto_start、scheduled、start_time、end_time、rounds、per_round、request_enabled、actions_enabled、proactive_enabled、share_cards、favorite_folder、max_video_seconds、comments_enabled、comment_daily_limit（0至10，默认3）；省略字段保持原值。视频Agent主动推荐，聊天Agent负责好友点播及公开评论。' },
     },
     output: textOutput,
     async execute(args, exec: ExecutionContext) {
       const startupError = await startup
       if (startupError) return JSON.stringify({ error: startupError })
-      if (!['status', 'configure', 'folders'].includes(args.action)) return JSON.stringify({ error: 'INVALID_ACTION' })
+      if (!['status', 'configure', 'folders', 'retry_review'].includes(args.action)) return JSON.stringify({ error: 'INVALID_ACTION' })
       return JSON.stringify(await bridge.call(`automation.${args.action}`, args.action === 'configure'
-        ? { config: JSON.parse(args.config_json || '{}') } : {}, { signal: exec.signal, timeoutMs: 75000 }))
+        ? { config: JSON.parse(args.config_json || '{}') } : args.action === 'retry_review' ? { video_id: args.video_id } : {}, { signal: exec.signal, timeoutMs: 75000 }))
     },
   }))
   ctx.tools.register(defineTool({

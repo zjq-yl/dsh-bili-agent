@@ -13,9 +13,9 @@ const methods = new Set([
   'dm.account', 'dm.status', 'dm.sync', 'dm.history', 'dm.reply', 'dm.compose', 'dm.send',
   'dm.start', 'dm.stop', 'dm.memory', 'dm.summarize',
   'friends.status', 'friends.save', 'friends.preferences', 'friends.feedback',
-  'automation.status', 'automation.configure', 'automation.folders',
+  'automation.status', 'automation.configure', 'automation.folders', 'automation.retry_review',
 ])
-const usesModel = new Set(['model.check', 'agent.start', 'dm.reply', 'dm.start', 'dm.summarize'])
+const usesModel = new Set(['model.check', 'agent.start', 'dm.reply', 'dm.start', 'dm.summarize', 'automation.retry_review'])
 const assets = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ['/panel.js', ['panel.js', 'text/javascript; charset=utf-8']],

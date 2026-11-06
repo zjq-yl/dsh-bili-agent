@@ -267,6 +267,60 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RpcError):
             self.auto.configure({'start_time': '21:00', 'end_time': '18:00'})
 
+    async def test_scheduled_popular_priority_stops_at_target_without_search(self):
+        self.auto.configure({'scheduled': True, 'start_time': '00:00', 'end_time': '23:59',
+                             'rounds': 1, 'per_round': 1})
+        self.auto.schedule(datetime.now(BEIJING).replace(hour=12))
+        original = self.platform.request
+        async def request(operation, params):
+            if operation == 'popular':
+                return {'candidates': [{'bvid': 'BV0000000009', 'title': '热门知识', 'duration': 100}]}
+            return await original(operation, params)
+        self.platform.request = AsyncMock(side_effect=request)
+        self.auto.configure({'discovery_source': 'search'})
+        with patch.object(self.auto, 'job_allowed', return_value=True), patch.object(self.runner, 'start'):
+            for _ in range(3):
+                job = self.store.db.execute('SELECT * FROM browse_jobs').fetchone()
+                await self.auto.browse(job)
+        job = self.store.db.execute('SELECT * FROM browse_jobs').fetchone()
+        self.assertEqual(job['state'], 'waiting')
+        self.assertEqual(self.platform.searches, [])
+        self.assertEqual(self.platform.request.call_args_list[0].args, ('popular', {'page': 1, 'limit': 20}))
+        self.assertEqual(self.store.db.execute('SELECT bvid FROM videos').fetchone()[0], 'BV0000000009')
+        self.auto.schedule(datetime.now(BEIJING).replace(hour=12))
+        self.assertEqual(self.store.db.execute('SELECT COUNT(*) FROM browse_jobs').fetchone()[0], 1)
+
+    async def test_popular_skips_unusable_videos_then_searches_only_remaining_target(self):
+        self.auto.configure({'scheduled': True, 'start_time': '00:00', 'end_time': '23:59',
+                             'rounds': 1, 'per_round': 2})
+        self.auto.schedule(datetime.now(BEIJING).replace(hour=12))
+        original = self.platform.request
+        async def request(operation, params):
+            if operation == 'popular':
+                return {'candidates': [
+                    {'bvid': 'BV0000000008', 'title': '超长视频', 'duration': 601},
+                    {'bvid': 'BV0000000009', 'title': '无字幕', 'duration': 100},
+                    {'bvid': 'BV0000000010', 'title': '可用热门', 'duration': 100}]}
+            if operation == 'fetch' and params['bvid'] == 'BV0000000009':
+                raise RpcError(-32010, 'NO_SUBTITLE_OR_LOGIN_REQUIRED')
+            return await original(operation, params)
+        self.platform.request = AsyncMock(side_effect=request)
+        with patch.object(self.auto, 'job_allowed', return_value=True), patch.object(self.runner, 'start'):
+            for _ in range(12):
+                job = self.store.db.execute('SELECT * FROM browse_jobs').fetchone()
+                if job['state'] == 'waiting':
+                    break
+                await self.auto.browse(job)
+        self.assertEqual(job['state'], 'waiting')
+        self.assertEqual(len(self.platform.searches), 1)
+        self.assertEqual(self.platform.searches[0]['page'], 1)
+        selected = {r[0] for r in self.store.db.execute('SELECT bvid FROM videos')}
+        self.assertEqual(selected, {'BV0000000010', 'BV0000000001'})
+        fetched = [c.args[1]['bvid'] for c in self.platform.request.call_args_list if c.args[0] == 'fetch']
+        self.assertNotIn('BV0000000008', fetched)
+        self.assertEqual(self.store.db.execute('SELECT error FROM browse_items WHERE bvid=?', ('BV0000000009',)).fetchone()[0],
+                         'NO_SUBTITLE_OR_LOGIN_REQUIRED')
+
     async def test_only_worthwhile_videos_are_proactively_recommended_and_replay_is_idempotent(self):
         self.friend()
         row = await self.video()
@@ -318,6 +372,49 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
             self.auto.interaction.prepare_results()
         self.assertEqual(self.dm.status()['outbox'], [])
         self.assertEqual(self.auto.status()['actions'], [])
+
+    async def test_review_corrects_excess_evidence_once_with_specific_feedback(self):
+        row = await self.video()
+        result = json.loads(row['result'])
+        valid = {'rating': '可以看', 'like': False, 'dislike': False, 'favorite': False,
+                 'reason': '内容有依据', 'evidence': [result['evidence'][0]['id']], 'recommendations': []}
+        bad = {**valid, 'evidence': valid['evidence'] * 11}
+        with patch.object(self.model, 'generate', AsyncMock(side_effect=[json.dumps(bad), json.dumps(valid)])) as model:
+            await self.auto.review(row)
+        self.assertEqual(model.await_count, 2)
+        feedback = json.loads(model.call_args_list[1].args[2])['validation_feedback']
+        self.assertEqual(feedback['field'], 'evidence')
+        self.assertEqual(feedback['attempts'], 1)
+        self.assertIn('1至10', model.call_args_list[0].args[1])
+        self.assertEqual(self.auto.assessment(row['id'])['rating'], '可以看')
+
+    async def test_failed_review_records_detail_and_retries_without_resummarizing(self):
+        row = await self.video()
+        result = json.loads(row['result'])
+        valid = {'rating': '可以看', 'like': False, 'dislike': False, 'favorite': False,
+                 'reason': '内容有依据', 'evidence': [result['evidence'][0]['id']], 'recommendations': []}
+        with patch.object(self.model, 'generate', AsyncMock(return_value='not JSON')) as model:
+            await self.auto.tick()
+        self.assertEqual(model.await_count, 2)
+        failed = self.auto.assessment(row['id'])
+        self.assertEqual(failed['error_detail']['field'], 'json')
+        self.assertEqual(failed['error_detail']['attempts'], 2)
+        self.assertFalse(self.auto.status()['actions'])
+        self.assertEqual(self.dm.status()['outbox'], [])
+        # Retry remains eligible even if the old video predates the automation window.
+        self.auto.created = time.time() + 10000
+        self.auto.configure({'actions_enabled': False, 'proactive_enabled': False, 'request_enabled': False, 'comments_enabled': False})
+        self.auto.retry_review(row['id'])
+        self.auto.retry_review(row['id'])
+        self.assertTrue(self.auto.assessment(row['id'])['retry_requested'])
+        with patch.object(self.model, 'generate', AsyncMock(return_value=json.dumps(valid))) as model:
+            await self.auto.tick()
+        model.assert_awaited_once()
+        self.assertEqual(model.call_args.args[0], 'video_decision')
+        self.assertEqual(self.auto.assessment(row['id'])['rating'], '可以看')
+        self.assertEqual(self.store.db.execute('SELECT result FROM videos WHERE id=?', (row['id'],)).fetchone()[0], row['result'])
+        with self.assertRaisesRegex(RpcError, 'VIDEO_REVIEW_NOT_FAILED'):
+            self.auto.retry_review(row['id'])
 
     async def test_dm_request_delivers_enough_results_before_exhausting_search_rounds(self):
         self.auto.configure({'proactive_enabled': False, 'actions_enabled': False})
@@ -421,7 +518,7 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(await self.auto.finish_request(job, early=True))
         self.assertEqual(model.await_count, 1)
 
-    async def test_explicit_requests_get_separate_replies_for_a_previously_recommended_video(self):
+    async def test_explicit_requests_do_not_resend_previously_recommended_video(self):
         self.friend()
         row = await self.video()
         await self.auto.review(row)
@@ -434,10 +531,22 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
             repeated = self.social.recommend('22', row['id'], result, '符合这次的需求', request_id=1)
             second = self.social.recommend('22', row['id'], result, '符合这次的需求', request_id=2)
             self.assertEqual(first, repeated)
-            self.assertEqual(len({original, first, second}), 3)
+            self.assertEqual(len({original, first, second}), 1)
             await self.dm.publish(first)
             await self.dm.publish(second)
-        self.assertEqual(len(self.platform.sent), 3)
+        self.assertEqual(len(self.platform.sent), 1)
+
+    async def test_history_search_excludes_videos_already_delivered_to_requester(self):
+        self.friend()
+        row = await self.video()
+        await self.auto.review(row)
+        draft = self.social.recommend('22', row['id'], json.loads(row['result']), '推荐理由', request_id=99)
+        await self.dm.publish(draft)
+        self.dm.ingest('22', [message()])
+        key = self.auto.request('22', '101', {'keyword': 'Python', 'count': 1})['id']
+        job = self.store.db.execute('SELECT * FROM browse_jobs WHERE id=?', (key,)).fetchone()
+        self.assertFalse(await self.auto.prepare_history(job))
+        self.assertEqual(self.store.db.execute('SELECT COUNT(*) FROM browse_items WHERE job_id=?', (key,)).fetchone()[0], 0)
 
     async def test_uncertain_result_never_marks_request_complete_or_resends(self):
         self.dm.ingest('22', [message()])

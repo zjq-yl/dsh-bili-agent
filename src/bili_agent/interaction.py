@@ -69,12 +69,13 @@ class InteractionAgent:
         if not self.job_allowed(job):
             return False  # Scope or privacy may have changed while waiting for the model.
         selection = [choice for choice in selection if choice['video_id'] in videos
-                     and self.social.matches(job['peer'], videos[choice['video_id']], json.loads(job['requirements']).get('max_seconds'))]
+                     and self.social.can_recommend(job['peer'], videos[choice['video_id']],
+                         json.loads(job['requirements']).get('max_seconds'), request_id=job['id'])]
         if not selection:
             failed = self.db.execute('''SELECT 1 FROM browse_items i LEFT JOIN videos v ON v.id=i.video_id
                 WHERE i.job_id=? AND (i.error IS NOT NULL OR v.state='failed') LIMIT 1''', (job['id'],)).fetchone()
             message = ('这次没有取得足够可用的分析结果，部分视频的字幕获取或分析失败，暂时不能给出可靠推荐。可以在面板查看原因并重试。'
-                       if failed else '这次没有找到已完成分析且适合推荐的视频。你可以换一个题材，我再找找。')
+                       if failed else '这次没有找到已完成分析、适合且尚未给你推荐过的新视频。之前推荐或等待发送确认的内容已排除，你可以换一个题材，我再找找。')
             draft = self.dm.compose(job['peer'], message, f"request-empty-{job['id']}")
             with self.db:
                 self.db.execute('INSERT OR IGNORE INTO request_deliveries(job_id,draft_id) VALUES(?,?)', (job['id'], draft['id']))
@@ -104,11 +105,12 @@ class InteractionAgent:
     def update_deliveries(self) -> None:
         """A generated result is complete only after every result text has a receipt."""
         for job in self.db.execute("SELECT id FROM browse_jobs WHERE account=? AND state='delivering'", (self.dm.account,)).fetchall():
-            states = [row[0] for row in self.db.execute("SELECT o.state FROM request_deliveries d JOIN dm_outbox o ON o.id=d.draft_id WHERE d.job_id=? AND d.role='result'", (job['id'],))]
-            if states and all(state == 'sent' for state in states):
+            deliveries = list(self.db.execute("SELECT o.state,o.error FROM request_deliveries d JOIN dm_outbox o ON o.id=d.draft_id WHERE d.job_id=? AND d.role='result'", (job['id'],)))
+            states = [row['state'] for row in deliveries]
+            if states and all(row['state'] == 'sent' or (row['state'] == 'cancelled' and row['error'] == 'DUPLICATE_RECOMMENDATION') for row in deliveries):
                 with self.db:
                     self.db.execute("UPDATE browse_jobs SET state='complete',error=NULL WHERE id=?", (job['id'],))
-                self.store.event('request', '推荐回复已全部确认发送', str(job['id']))
+                self.store.event('request', '推荐结果已处理，重复视频已跳过' if 'cancelled' in states else '推荐回复已全部确认发送', str(job['id']))
             elif any(state in ('uncertain', 'cancelled') for state in states):
                 with self.db:
                     self.db.execute("UPDATE browse_jobs SET error='DM_SEND_UNCERTAIN' WHERE id=?", (job['id'],))

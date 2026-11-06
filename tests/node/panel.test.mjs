@@ -41,7 +41,7 @@ test('panel requires local authenticated same-origin actions and never exposes a
   try {
     assert.equal(JSON.parse(await readFile(join(dir, 'panel.json'), 'utf8')).url, panel.url)
     const page = await fetch(url.origin)
-    assert.match(await page.text(), /B站机器人/)
+    assert.match(await page.text(), /<script src="\/panel.js" defer><\/script>/)
     assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/)
     assert.equal((await fetch(`${url.origin}/api/status`)).status, 401)
     const invalidHost = await new Promise((resolve, reject) => {

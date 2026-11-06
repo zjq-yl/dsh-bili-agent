@@ -77,7 +77,7 @@ class Platform:
                 self.next_request = time.monotonic() + 3
             try:
                 async with asyncio.timeout(60):
-                    handlers = {"search": self.search, "fetch": self.fetch, "audio": self.audio, 'metadata': self.metadata,
+                    handlers = {"search": self.search, "popular": self.popular, "fetch": self.fetch, "audio": self.audio, 'metadata': self.metadata,
                                 "identity": self.identity, "sessions": self.sessions, "messages": self.messages,
                                 "send_dm": self.send_dm, "share_video": self.share_video, 'send_comment': self.send_comment,
                                 "video_action": self.video_action, "favorite_folders": self.favorite_folders}
@@ -100,7 +100,8 @@ class Platform:
                 if isinstance(exc, OSError) and exc.errno in (errno.EACCES, errno.EPERM):
                     self.last_status = "NETWORK_ACCESS_DENIED"
                 else:
-                    self.last_status = {-101: "LOGIN_REQUIRED", -412: "PLATFORM_CHALLENGE", -404: "VIDEO_UNAVAILABLE"}.get(code, "PLATFORM_REQUEST_FAILED")
+                    self.last_status = {-101: "LOGIN_REQUIRED", -352: "PLATFORM_CHALLENGE",
+                                        -412: "PLATFORM_CHALLENGE", -404: "VIDEO_UNAVAILABLE"}.get(code, "PLATFORM_REQUEST_FAILED")
                 raise RpcError(-32010, self.last_status) from None
 
     def credential(self):
@@ -151,7 +152,18 @@ class Platform:
         try:
             response = await comment.send_comment(text.strip(), video.Video(bvid=bvid).get_aid(),
                 comment.CommentResourceType.VIDEO, credential=credential)
-            return {'rpid': str(response.get('rpid') or (response.get('reply') or {}).get('rpid') or '')}
+            # Community receipt handling references are recorded in THIRD-PARTY-NOTICES.md.
+            if not isinstance(response, dict):
+                raise RpcError(-32040, 'COMMENT_RECEIPT_MISSING')
+            if response.get('need_captcha'):
+                raise RpcError(-32040, 'PLATFORM_CHALLENGE')
+            reply = response.get('reply')
+            reply = reply if isinstance(reply, dict) else {}
+            rpid = str(response.get('rpid_str') or response.get('rpid')
+                       or reply.get('rpid_str') or reply.get('rpid') or '')
+            if not re.fullmatch(r'[1-9][0-9]{0,39}', rpid):
+                raise RpcError(-32040, 'COMMENT_RECEIPT_MISSING')
+            return {'rpid': rpid}
         finally:
             request_settings.set_wbi_retry_times(previous)
 
@@ -255,6 +267,25 @@ class Platform:
                 'cover': info.get('pic', ''), 'author': str((info.get('owner') or {}).get('name', ''))[:100],
                 'author_uid': str((info.get('owner') or {}).get('mid') or ''),
                 "url": track.get("baseUrl") or track.get("base_url"), "track_id": str(track.get("id", ""))}
+
+    async def popular(self, params: dict) -> dict:
+        """Fetch a bounded page of the popular feed using the existing Bilibili SDK."""
+        page, limit = params.get('page', 1), params.get('limit', 20)
+        if type(page) is not int or not 1 <= page <= 50 or type(limit) is not int or not 1 <= limit <= 20:
+            raise RpcError(-32602, 'INVALID_SEARCH_PAGE')
+        from bilibili_api import hot
+        data = await hot.get_hot_videos(pn=page, ps=limit)
+        items = []
+        for row in data.get('list', []):
+            if not isinstance(row, dict) or not re.fullmatch(r'BV[0-9A-Za-z]{10}', str(row.get('bvid', ''))):
+                continue
+            owner = row.get('owner') or {}
+            items.append({'bvid': row['bvid'], 'title': str(row.get('title', ''))[:300],
+                          'author': str(owner.get('name', ''))[:100], 'author_uid': str(owner.get('mid') or ''),
+                          'duration': row.get('duration', 0)})
+            if len(items) == limit:
+                break
+        return {'candidates': items, 'source': 'bilibili_popular', 'page': page}
 
     async def search(self, params):
         keyword = params.get("keyword")

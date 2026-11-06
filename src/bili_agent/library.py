@@ -18,6 +18,9 @@ def cover_url(value: object) -> str:
     value = 'https:' + value if value.startswith('//') else value
     try:
         url = urlsplit(value)
+        if (url.scheme == 'http' and (url.hostname or '').endswith('.hdslb.com')
+                and not url.username and not url.password and url.port in (None, 80)):
+            return url._replace(scheme='https', netloc=url.hostname).geturl()
         return value if (url.scheme == 'https' and (url.hostname or '').endswith('.hdslb.com')
                          and not url.username and not url.password and url.port in (None, 443)) else ''
     except ValueError:
