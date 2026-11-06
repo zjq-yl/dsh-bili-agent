@@ -40,7 +40,7 @@ export async function generateText(llm: any, config: ModelConfig, params: any, s
     for await (const chunk of llm.stream({
       provider: config.provider, model: config.model, system: params.system,
       messages: [{ role: 'user', content: [{ type: 'text', text: params.text }] }],
-      maxTokens: 4096, signal: combined,
+      maxTokens: params.purpose === 'dm_reply' ? 1200 : 4096, signal: combined,
     })) {
       combined.throwIfAborted()
       if (chunk.type === 'text-delta') {

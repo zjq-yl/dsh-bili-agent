@@ -28,10 +28,12 @@ class ModelPriorityTests(unittest.IsolatedAsyncioTestCase):
                 await entered.wait()
                 tasks.append(asyncio.create_task(model.generate('segment_summary', '', 'background')))
                 tasks.append(asyncio.create_task(model.generate('dm_reply', '', 'reply')))
-                cancelled = asyncio.create_task(model.generate('dm_reply', '', 'cancelled'))
+                cancelled = asyncio.create_task(model.generate('segment_summary', '', 'cancelled'))
                 await asyncio.sleep(0)
                 cancelled.cancel()
                 await asyncio.gather(cancelled, return_exceptions=True)
+                await asyncio.wait_for(tasks[-1], 1)
+                self.assertFalse(tasks[0].done())  # Chat completes while video analysis is still blocked.
                 release.set()
                 await asyncio.gather(*tasks)
                 self.assertEqual(order, ['running', 'reply', 'background'])

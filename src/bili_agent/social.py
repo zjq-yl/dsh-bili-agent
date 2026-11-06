@@ -36,6 +36,7 @@ class Social:
         self.error = None
         self.model_driven = False
         self.proactive_enabled = True
+        self.share_cards = True
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS friends(
                 account TEXT NOT NULL, peer TEXT NOT NULL, name TEXT NOT NULL,
@@ -371,6 +372,10 @@ class Social:
             return
         if self.messaging.priority_pending():
             return
+        if self.messaging.delivery_window()['reason']:
+            return
+        if await self.send_proactive_card():
+            return
         pending = self.db.execute("""SELECT o.id,o.peer,r.bvid FROM recommendations r
             JOIN dm_outbox o ON o.id=r.draft_id JOIN friends f ON f.account=r.account AND f.peer=r.peer
             WHERE r.account=? AND f.recommend=1 AND f.auto_send=1 AND o.state='draft'
@@ -392,6 +397,35 @@ class Social:
                 raise RpcError(-32040, 'DM_SEND_UNCERTAIN')
             break  # One automatic recommendation per tick; normal DM quotas still apply.
 
+    async def send_proactive_card(self) -> bool:
+        """Video Agent delivers only cards attached to its proactive recommendations."""
+        if not self.share_cards:
+            return False
+        rows = self.db.execute('''SELECT o.* FROM dm_outbox o JOIN recommendations r ON r.draft_id=o.depends_on
+            JOIN dm_outbox parent ON parent.id=o.depends_on
+            WHERE r.account=? AND o.state='draft' AND o.card_bvid IS NOT NULL AND parent.state='sent'
+            ORDER BY o.created LIMIT 20''', (self.messaging.account,)).fetchall()
+        for row in rows:
+            friend = self.profile(row['peer'])
+            if not friend or not friend['recommend'] or not friend['auto_send'] or row['peer'] not in self.messaging.allowed_peers:
+                continue
+            decision = self.db.execute('SELECT value FROM video_decisions WHERE account=? AND bvid=?', (self.messaging.account, row['card_bvid'])).fetchone()
+            if not decision or json.loads(decision[0]).get('rating') != '值得看':
+                continue
+            source = self.db.execute("SELECT result FROM videos WHERE bvid=? AND state='done' LIMIT 1", (row['card_bvid'],)).fetchone()
+            if not source or not self.matches(row['peer'], json.loads(source[0])):
+                continue
+            try:
+                self.guard_delivery(row)
+            except RpcError as exc:
+                if str(exc) == 'RECOMMENDATION_CARD_EXPIRED':
+                    with self.db:
+                        self.db.execute("UPDATE dm_outbox SET state='cancelled',error=? WHERE id=?", (str(exc), row['id']))
+                continue
+            await self.messaging.publish(row['id'])
+            return True
+        return False
+
     async def run(self):
         while True:
             self.wake.clear()
@@ -405,7 +439,7 @@ class Social:
             except Exception as exc:
                 self.error = type(exc).__name__
             try:
-                await asyncio.wait_for(self.wake.wait(), 60)
+                await asyncio.wait_for(self.wake.wait(), 10)
             except TimeoutError:
                 pass
 

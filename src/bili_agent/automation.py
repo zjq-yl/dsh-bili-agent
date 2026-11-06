@@ -13,7 +13,7 @@ BEIJING = timezone(timedelta(hours=8))
 DEFAULTS = {'dm_auto_start': True, 'scheduled': True, 'start_time': '18:00', 'end_time': '21:00',
             'rounds': 3, 'per_round': 5, 'request_enabled': True, 'actions_enabled': True,
             'proactive_enabled': True, 'share_cards': True, 'favorite_folder': '',
-            'max_video_seconds': 600}
+            'max_video_seconds': 600, 'comments_enabled': True, 'comment_daily_limit': 3}
 TRANSIENT = {'MODEL_BUSY', 'PLATFORM_BUSY', 'DM_SEND_BUSY', 'DM_SEND_LIMIT'}
 
 
@@ -31,8 +31,8 @@ def minutes(value: str) -> int:
     return hour * 60 + minute
 
 
-class Automation:
-    """Own persisted schedules and decisions; all sends use the existing guarded outbox."""
+class VideoAgent:
+    """Own discovery, analysis, three-tier ratings and durable results for the Interaction Agent."""
 
     def __init__(self, store, runner, messaging, social, platform, model, data_dir):
         self.db, self.runner, self.dm, self.social = store.db, runner, messaging, social
@@ -86,18 +86,22 @@ class Automation:
             self.db.execute("UPDATE browse_jobs SET error=NULL WHERE error='MODEL_DAILY_LIMIT'")
             self.db.execute("UPDATE dm_outbox SET state='cancelled',error='LOCAL_MODEL_LIMIT_REMOVED' WHERE state='draft' AND command_id GLOB 'request-wait-*-MODEL_DAILY_LIMIT'")
 
+        from .interaction import InteractionAgent
+        self.interaction = InteractionAgent(self)
+        self.social.share_cards = self.config['share_cards']
+
     def configure(self, value: dict) -> dict:
         """Validate owner settings; changing a window never clears today's completed rounds."""
         if not isinstance(value, dict) or set(value) - set(DEFAULTS):
             raise RpcError(-32602, 'INVALID_AUTOMATION_CONFIG')
         config = {**self.config, **value}
-        for key in ('dm_auto_start', 'scheduled', 'request_enabled', 'actions_enabled', 'proactive_enabled', 'share_cards'):
+        for key in ('dm_auto_start', 'scheduled', 'request_enabled', 'actions_enabled', 'proactive_enabled', 'share_cards', 'comments_enabled'):
             if type(config[key]) is not bool:
                 raise RpcError(-32602, 'INVALID_AUTOMATION_CONFIG')
         start, end = minutes(config['start_time']), minutes(config['end_time'])
         if start >= end:
             raise RpcError(-32602, 'AUTOMATION_WINDOW_MUST_BE_SAME_DAY')
-        for key, lo, hi in [('rounds', 1, 6), ('per_round', 1, 5), ('max_video_seconds', 30, 3600)]:
+        for key, lo, hi in [('rounds', 1, 6), ('per_round', 1, 5), ('max_video_seconds', 30, 3600), ('comment_daily_limit', 0, 10)]:
             if type(config[key]) is not int or not lo <= config[key] <= hi:
                 raise RpcError(-32602, 'INVALID_AUTOMATION_CONFIG')
         if not isinstance(config['favorite_folder'], str) or (config['favorite_folder'] and not re.fullmatch(r'[1-9][0-9]{0,19}', config['favorite_folder'])):
@@ -106,11 +110,15 @@ class Automation:
             self.db.execute('UPDATE automation_settings SET value=? WHERE id=1', (json.dumps(config),))
         if config['dm_auto_start'] and not self.config['dm_auto_start']:
             self.start_attempted = self.dm_paused = False
+        if config['comments_enabled'] and not self.config['comments_enabled']:
+            self.interaction.comments.reset_window()
         self.config = config
         self.social.proactive_enabled = config['proactive_enabled']
+        self.social.share_cards = config['share_cards']
         with self.db:
             self.db.execute("UPDATE video_actions SET state='planned',error=NULL WHERE action='favorite' AND state='blocked' AND error='FAVORITE_FOLDER_REQUIRED'")
         self.wake.set()
+        self.interaction.wake.set()
         return self.status()
 
     def status(self) -> dict:
@@ -335,11 +343,15 @@ class Automation:
             with self.db:
                 self.db.execute('INSERT INTO video_decisions VALUES(?,?,?,?)', (self.dm.account, row['bvid'], row['id'], json.dumps(decision)))
             self.store.event('review', f"视频评价：{decision['rating']}；选中 {len(decision['recommendations'])} 位推荐对象", row['bvid'])
-        with self.db:
-            for action in ('like', 'dislike', 'favorite'):
-                if decision[action] and self.config['actions_enabled']:
-                    self.db.execute('INSERT OR IGNORE INTO video_actions(account,bvid,action,reason) VALUES(?,?,?,?)',
-                                     (self.dm.account, row['bvid'], action, decision['reason']))
+        self.prepare_proactive(row, decision, result)
+        self.interaction.wake.set()
+
+    def prepare_proactive(self, row, decision, result):
+        """Video Agent alone creates unsolicited pushes; explicit requests use a separate handoff."""
+        # A friend's explicit search is answered by the Chat Agent, not duplicated as an unsolicited push.
+        if self.db.execute("""SELECT 1 FROM browse_items i JOIN browse_jobs j ON j.id=i.job_id
+            WHERE i.video_id=? AND j.account=? AND j.kind='request' LIMIT 1""", (row['id'], self.dm.account)).fetchone():
+            return
         if self.config['proactive_enabled'] and decision.get('rating') == '值得看':
             for recommendation in decision['recommendations']:
                 friend = self.social.profile(recommendation['peer_uid'])
@@ -398,158 +410,24 @@ class Automation:
                 return False
             with self.db:
                 self.db.execute('UPDATE browse_jobs SET selection=? WHERE id=?', (json.dumps(selection), job['id']))
-        if not self.job_allowed(job):
-            return False  # Scope or privacy may have changed while waiting for the model.
-        selection = [choice for choice in selection if choice['video_id'] in videos
-                     and self.social.matches(job['peer'], videos[choice['video_id']], json.loads(job['requirements']).get('max_seconds'))]
-        if not selection:
-            failed = self.db.execute('''SELECT 1 FROM browse_items i LEFT JOIN videos v ON v.id=i.video_id
-                WHERE i.job_id=? AND (i.error IS NOT NULL OR v.state='failed') LIMIT 1''', (job['id'],)).fetchone()
-            message = ('这次没有取得足够可用的分析结果，部分视频的字幕获取或分析失败，暂时不能给出可靠推荐。可以在面板查看原因并重试。'
-                       if failed else '这次没有找到已完成分析且适合推荐的视频。你可以换一个题材，我再找找。')
-            draft = self.dm.compose(job['peer'], message, f"request-empty-{job['id']}")
-            with self.db:
-                self.db.execute('INSERT OR IGNORE INTO request_deliveries(job_id,draft_id) VALUES(?,?)', (job['id'], draft['id']))
-        for choice in selection:
-            if choice['video_id'] not in videos:
-                continue  # Preferences can change after selection was saved.
-            draft_id = self.social.recommend(job['peer'], choice['video_id'], videos[choice['video_id']], choice['reason'],
-                                             choice['share'] and self.config['share_cards'], request_id=job['id'])
-            with self.db:
-                self.db.execute('INSERT OR IGNORE INTO request_deliveries(job_id,draft_id) VALUES(?,?)', (job['id'], draft_id))
         with self.db:
-            self.db.execute("UPDATE browse_jobs SET state='delivering',error=NULL WHERE id=?", (job['id'],))
-        self.store.event('request', f'推荐结果已生成，等待发送，共 {len(selection)} 个视频', str(job['id']))
+            self.db.execute("UPDATE browse_jobs SET state='result_ready',error=NULL WHERE id=?", (job['id'],))
+        self.interaction.wake.set()
         return True
-
-    def notify_waiting(self, job, error: str) -> None:
-        """Send one durable progress reply per request/error/day, without claiming completion."""
-        if job['kind'] != 'request' or not self.job_allowed(job):
-            return
-        message = '找视频的请求暂时遇到了处理问题，尚未完成推荐。进度已经保留，可以在控制面板查看具体原因。'
-        key = f"request-wait-{job['id']}-{int(time.time() // 86400)}-{error[:30]}"
-        draft = self.dm.compose(job['peer'], message, key)
-        with self.db:
-            self.db.execute("INSERT OR IGNORE INTO request_deliveries(job_id,draft_id,role) VALUES(?,?,'progress')", (job['id'], draft['id']))
-            self.db.execute('UPDATE browse_jobs SET error=? WHERE id=?', (error, job['id']))
-
-    def update_deliveries(self) -> None:
-        """A generated result is complete only after every result text has a receipt."""
-        for job in self.db.execute("SELECT id FROM browse_jobs WHERE account=? AND state='delivering'", (self.dm.account,)).fetchall():
-            states = [row[0] for row in self.db.execute("SELECT o.state FROM request_deliveries d JOIN dm_outbox o ON o.id=d.draft_id WHERE d.job_id=? AND d.role='result'", (job['id'],))]
-            if states and all(state == 'sent' for state in states):
-                with self.db:
-                    self.db.execute("UPDATE browse_jobs SET state='complete',error=NULL WHERE id=?", (job['id'],))
-                self.store.event('request', '推荐回复已全部确认发送', str(job['id']))
-            elif any(state in ('uncertain', 'cancelled') for state in states):
-                with self.db:
-                    self.db.execute("UPDATE browse_jobs SET error='DM_SEND_UNCERTAIN' WHERE id=?", (job['id'],))
-
-    async def send_pending(self) -> None:
-        if not self.dm.send_enabled:
-            return
-        rows = self.db.execute('''SELECT o.* FROM dm_outbox o WHERE o.account=? AND o.state='draft'
-            AND (EXISTS(SELECT 1 FROM request_deliveries d WHERE d.draft_id=o.id OR d.draft_id=o.depends_on)
-                 OR o.card_bvid IS NOT NULL)
-            ORDER BY EXISTS(SELECT 1 FROM request_deliveries d WHERE d.draft_id=o.id OR d.draft_id=o.depends_on) DESC,o.created LIMIT 20''', (self.dm.account,)).fetchall()
-        for row in rows:
-            if row['peer'] not in self.dm.allowed_peers:
-                continue
-            job = self.db.execute('''SELECT j.* FROM browse_jobs j JOIN request_deliveries d ON d.job_id=j.id
-                WHERE d.draft_id=? OR d.draft_id=?''', (row['id'], row['depends_on'])).fetchone()
-            friend = self.social.profile(row['peer'])
-            if job:
-                if not self.job_allowed(job):
-                    continue
-            elif not self.config['proactive_enabled'] or not friend or not friend['auto_send'] or not friend['recommend']:
-                continue
-            elif self.dm.priority_pending():
-                continue
-            elif row['card_bvid']:
-                delivery = self.social.delivery_status(row['peer'])
-                if delivery['reason'] and delivery['reason'] != 'RECOMMENDATION_DAILY_LIMIT':
-                    continue
-                if not self.social.preferences(row['peer'])['daily_limit']:
-                    continue
-                video = self.db.execute("SELECT result FROM videos WHERE bvid=? AND state='done' LIMIT 1", (row['card_bvid'],)).fetchone()
-                if video and not self.social.matches(row['peer'], json.loads(video[0])):
-                    continue
-                decision = self.db.execute('SELECT value FROM video_decisions WHERE account=? AND bvid=?', (self.dm.account, row['card_bvid'])).fetchone()
-                if not decision or json.loads(decision[0]).get('rating') != '值得看':
-                    continue
-            if row['card_bvid'] and not self.config['share_cards']:
-                continue
-            if row['depends_on']:
-                parent = self.db.execute('SELECT state FROM dm_outbox WHERE id=?', (row['depends_on'],)).fetchone()
-                if not parent or parent['state'] != 'sent':
-                    if not parent or parent['state'] in ('uncertain', 'cancelled'):
-                        with self.db:
-                            self.db.execute("UPDATE dm_outbox SET state='cancelled',error='CARD_PARENT_NOT_CONFIRMED' WHERE id=?", (row['id'],))
-                    continue
-            try:
-                await self.dm.publish(row['id'])
-            except RpcError as exc:
-                if str(exc) == 'RECOMMENDATION_CARD_EXPIRED':
-                    with self.db:
-                        self.db.execute("UPDATE dm_outbox SET state='cancelled',error=? WHERE id=?", (str(exc), row['id']))
-                    continue
-                raise
-            self.update_deliveries()
-            break
-
-    async def perform_action(self) -> None:
-        if not self.config['actions_enabled']:
-            return
-        row = self.db.execute("SELECT * FROM video_actions WHERE account=? AND state='planned' ORDER BY rowid LIMIT 1", (self.dm.account,)).fetchone()
-        if not row:
-            return
-        now = time.time()
-        attempts = self.db.execute('SELECT COUNT(*),MAX(attempted) FROM video_actions WHERE account=? AND attempted>=?',
-                                   (self.dm.account, int(now // 86400) * 86400)).fetchone()
-        if attempts[0] >= 30 or (attempts[1] and now - attempts[1] < 60):
-            return
-        await self.dm.bind()  # Verify the current login still belongs to this data directory.
-        key = (self.dm.account, row['bvid'], row['action'])
-        with self.db:
-            self.db.execute("UPDATE video_actions SET state='sending',attempted=? WHERE account=? AND bvid=? AND action=?", (now, *key))
-        try:
-            result = await self.platform.request('video_action', {'account_uid': self.dm.account, 'bvid': row['bvid'],
-                'action': row['action'], 'folder_id': self.config['favorite_folder']})
-            if result.get('accepted') is not True:
-                raise RpcError(-32040, 'ACTION_RECEIPT_MISSING')
-            state, error = 'sent', None
-        except asyncio.CancelledError:
-            with self.db:
-                self.db.execute("UPDATE video_actions SET state='uncertain',error='CANCELLED_AFTER_ACTION_START' WHERE account=? AND bvid=? AND action=?", key)
-            raise
-        except Exception as exc:
-            error = str(exc) if isinstance(exc, RpcError) else type(exc).__name__
-            state = 'local_only' if error == 'DISLIKE_REQUIRES_APP_TOKEN' else 'blocked' if error == 'FAVORITE_FOLDER_REQUIRED' else 'uncertain'
-        with self.db:
-            self.db.execute('UPDATE video_actions SET state=?,error=? WHERE account=? AND bvid=? AND action=?', (state, error, *key))
 
     async def tick(self) -> None:
         if not self.dm.account:
             return
-        # Sending completed work must not depend on having model budget left for new reviews.
-        self.update_deliveries()
-        try:
-            await self.send_pending()
-            self.delivery_error = None
-        except RpcError as exc:
-            self.delivery_error = str(exc)
-            # A send cooldown or unavailable recipient must never stop analysis or result creation.
-        try:
-            await self.perform_action()
-        except RpcError as exc:
-            self.store.event('action', '平台操作暂未完成', error=str(exc))
+        # Video Agent owns unsolicited recommendations, including restart-safe delivery replay.
+        for saved in self.db.execute("SELECT v.*,d.value FROM video_decisions d JOIN videos v ON v.id=d.video_id WHERE d.account=? AND v.state='done'", (self.dm.account,)).fetchall():
+            self.prepare_proactive(saved, json.loads(saved['value']), json.loads(saved['result']))
         self.schedule()
         if not self.video_paused:
             for job in self.db.execute("SELECT * FROM browse_jobs WHERE account=? AND kind='request' AND state IN ('queued','browsing','waiting')", (self.dm.account,)).fetchall():
                 if not self.job_allowed(job):
                     continue
                 for video in self.db.execute("SELECT v.id,v.error,v.retry_at FROM browse_items i JOIN videos v ON v.id=i.video_id WHERE i.job_id=? AND v.state='failed' AND v.retry_at>0", (job['id'],)).fetchall():
-                    self.notify_waiting(job, video['error'])
+                    self.interaction.notify_waiting(job, video['error'])
                     if video['retry_at'] <= time.time():
                         self.runner.retry(video['id'])
                         self.runner.start()
@@ -593,9 +471,6 @@ class Automation:
                         (self.dm.account, row['bvid'], row['id'], json.dumps({'rating': None,
                          'reason': '评价模型输出不合规，未执行动作或推荐', 'evidence': [],
                          'like': False, 'dislike': False, 'favorite': False, 'recommendations': [], 'error': str(exc)})))
-        for saved in self.db.execute('''SELECT v.*,e.created FROM video_decisions d JOIN videos v ON v.id=d.video_id
-            JOIN experiences e ON e.video_id=v.id WHERE d.account=? ORDER BY v.id DESC LIMIT 30''', (self.dm.account,)).fetchall():
-            await self.review(saved)
         # Deliver enough matching results promptly instead of waiting for every search round.
         for job in self.db.execute("SELECT * FROM browse_jobs WHERE account=? AND kind='request' AND state IN ('queued','browsing','waiting') ORDER BY id LIMIT 10", (self.dm.account,)).fetchall():
             if self.job_allowed(job):
@@ -618,6 +493,7 @@ class Automation:
                     self.db.execute("UPDATE browse_jobs SET state='complete' WHERE id=?", (job['id'],))
 
     def start(self) -> None:
+        self.social.start()
         if self.task is None or self.task.done():
             self.task = asyncio.create_task(self.run())
 
@@ -627,11 +503,6 @@ class Automation:
             try:
                 # Missing credentials are an observable configuration state, not a reason to spam anonymous requests.
                 if (self.data_dir / 'credentials.json').is_file():
-                    if self.config['dm_auto_start'] and not self.dm_paused and not self.start_attempted:
-                        await self.dm.start(auto_send=self.dm.send_enabled and bool(self.dm.allowed_peers))
-                        self.start_attempted = True
-                    elif not self.dm.account:
-                        await self.dm.bind()
                     await self.tick()
                 self.error = None
             except asyncio.CancelledError:
@@ -640,7 +511,7 @@ class Automation:
                 self.error = str(exc) if isinstance(exc, RpcError) else type(exc).__name__
                 self.store.event('automation', '自动任务等待处理', error=self.error)
                 for job in self.db.execute("SELECT * FROM browse_jobs WHERE account=? AND kind='request' AND state IN ('queued','browsing','waiting')", (self.dm.account,)).fetchall():
-                    self.notify_waiting(job, self.error)
+                    self.interaction.notify_waiting(job, self.error)
             finally:
                 self.activity = None
             try:
@@ -649,6 +520,10 @@ class Automation:
                 pass
 
     async def close(self) -> None:
+        await self.social.close()
         if self.task and not self.task.done():
             self.task.cancel()
             await asyncio.gather(self.task, return_exceptions=True)
+
+# Compatibility name for existing plugin integrations.
+Automation = VideoAgent

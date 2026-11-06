@@ -1,4 +1,5 @@
 import sys
+import asyncio
 import json
 import errno
 import tempfile
@@ -12,6 +13,44 @@ from bili_agent.protocol import RpcError
 
 
 class PlatformTests(unittest.IsolatedAsyncioTestCase):
+    async def test_public_comment_uses_video_resource_and_returns_receipt(self):
+        send = AsyncMock(return_value={'rpid': 123456})
+        settings = SimpleNamespace(get_wbi_retry_times=Mock(return_value=3), set_wbi_retry_times=Mock())
+        sdk = SimpleNamespace(comment=SimpleNamespace(send_comment=send, CommentResourceType=SimpleNamespace(VIDEO=1)),
+            video=SimpleNamespace(Video=Mock(return_value=SimpleNamespace(get_aid=lambda: 170001))))
+        with tempfile.TemporaryDirectory() as directory, patch.dict(sys.modules, {
+                'bilibili_api': sdk, 'bilibili_api.utils': SimpleNamespace(),
+                'bilibili_api.utils.network': SimpleNamespace(request_settings=settings)}):
+            platform = Platform(Path(directory))
+            credential = object()
+            platform.credential = lambda: credential
+            result = await platform.send_comment({'bvid': 'BV17x411w7KC', 'text': '有具体例子，便于理解。'})
+            self.assertEqual(result, {'rpid': '123456'})
+            self.assertEqual(send.call_args.args[1:], (170001, 1))
+            self.assertIs(send.call_args.kwargs['credential'], credential)
+            self.assertEqual([call.args[0] for call in settings.set_wbi_retry_times.call_args_list], [1, 3])
+
+    async def test_slow_video_fetch_does_not_hold_private_message_lane(self):
+        with tempfile.TemporaryDirectory() as directory:
+            platform = Platform(Path(directory))
+            entered, release = asyncio.Event(), asyncio.Event()
+            async def slow(params):
+                entered.set()
+                await release.wait()
+                return {}
+            platform.fetch = slow
+            platform.identity = AsyncMock(return_value={'uid': '77'})
+            video = asyncio.create_task(platform.request('fetch', {}))
+            try:
+                await entered.wait()
+                platform.next_request = 0  # Advance the shared rate gate, not the in-flight video.
+                result = await asyncio.wait_for(platform.request('identity', {}), 1)
+                self.assertEqual(result['uid'], '77')
+                self.assertFalse(video.done())
+            finally:
+                release.set()
+                await video
+
     async def test_video_card_uses_type_seven_and_platform_metadata(self):
         captured = {}
         class Api:

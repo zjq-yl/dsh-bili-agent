@@ -32,6 +32,7 @@
       <article class="stat"><span>私信监听</span><strong id="dm-state">待连接</strong><small id="dm-detail">等待读取状态</small></article>
     </div>
     <div class="toolbar"><span id="updated" class="subtle">正在建立实时连接</span><div><button id="verify-account" class="secondary">验证 B 站账号</button><button id="verify-model" class="secondary">测试模型连接</button></div></div>
+    <div id="agent-status" class="job-grid"></div>
     <div class="overview-grid">
     <article class="card live-card"><div class="section-heading"><h2>当前任务</h2><span class="badge">实时更新</span></div><div id="live-activity"></div><p id="send-progress" class="hint"></p><p id="model-progress" class="subtle"></p><p id="recommendation-readiness" class="hint"></p><div id="live-requests" class="job-grid"></div></article>
     <article class="day-card"><div><p class="eyebrow">今日计划</p><h2 id="daily-window">18:00 — 21:00</h2><p id="daily-detail">3 轮 · 每轮最多 5 个视频</p><div id="daily-slots" class="slot-list"></div></div><div class="day-note"><span>按计划浏览，按兴趣推荐</span><p>总结后分为三档，仅主动推荐值得看的内容。</p><a href="#automation" class="inline-route">调整计划 →</a></div></article>
@@ -49,9 +50,11 @@
           <fieldset><legend>交流与推荐</legend><label class="check"><input id="auto-dm" type="checkbox">DSH 启动后自动监听私信</label><label class="check"><input id="auto-request" type="checkbox">好友索要推荐时，主动找视频</label><label class="check"><input id="auto-proactive" type="checkbox">主动推荐“值得看”的视频</label><label class="check"><input id="auto-share" type="checkbox">特别合适时附加视频转发卡片</label><p class="subtle">推荐仍需匹配好友兴趣，并受发送范围、好友开关及额度约束。卡片在推荐理由发送成功后单独发送。</p></fieldset>
           <fieldset><legend>视频互动</legend><label class="check"><input id="auto-actions" type="checkbox">允许模型决定点赞、收藏和不喜欢</label><label>收藏夹 ID（留空使用默认收藏夹）<input id="auto-folder" inputmode="numeric" placeholder="默认收藏夹"></label><button id="load-folders" type="button" class="secondary">读取我的收藏夹</button><p id="folder-options" class="subtle"></p><p class="subtle">未配置 App 凭据时，“不喜欢”仅记录在本地并避开后续选片，操作记录会明确标注。</p></fieldset>
           <fieldset><legend>选片范围</legend><label>自动选择视频的最长秒数<input id="auto-duration" type="number" min="30" max="3600" value="600" required></label><p class="subtle">按时段、轮数、视频数和时长控制浏览量。模型调用仅统计，不设次数上限。</p></fieldset>
+          <fieldset><legend>互动 Agent · 公开评论</legend><label class="check"><input id="auto-comments" type="checkbox">按人设选择新分析的视频发表评论</label><label>每天最多评论数<input id="auto-comment-limit" type="number" min="0" max="10" value="3" required></label><p class="subtle">模型可以不评论。只基于已分析内容，不补发旧视频；同一视频只发一次，结果待确认时不重发。评论与私信推荐分别计数。</p></fieldset>
         </div><div class="form-footer"><span class="subtle">设置保存在当前账号的数据目录。</span><button type="submit" class="primary">保存设置</button></div>
       </form>
       <div class="section-heading spaced"><h3>浏览记录</h3><span class="subtle">包含定时任务和好友请求</span></div><div id="browse-jobs" class="job-grid"></div>
+      <details class="spaced"><summary>公开评论记录</summary><div id="public-comments" class="job-grid"></div></details>
     </section>
     <section id="videos" class="card" hidden>
       <div class="section-heading"><div><h2>全部视频</h2><p id="library-total" class="subtle">正在读取视频库</p></div><label>分类<select id="rating-filter"><option value="">全部视频</option><option>值得看</option><option>可以看</option><option>没必要看</option><option value="unrated">待评价 / 未完成</option></select></label></div>

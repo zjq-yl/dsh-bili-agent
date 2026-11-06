@@ -314,7 +314,7 @@ class MessagingTests(unittest.IsolatedAsyncioTestCase):
         failed = False
         async def flaky(operation, params):
             nonlocal failed
-            if operation == 'sessions' and not failed:
+            if operation == 'messages' and not failed:
                 failed = True
                 raise RpcError(-32010, 'PLATFORM_REQUEST_FAILED')
             return await original(operation, params)
@@ -327,6 +327,64 @@ class MessagingTests(unittest.IsolatedAsyncioTestCase):
                     await asyncio.sleep(.005)
             self.assertTrue(failed)
             self.assertEqual(self.dm.state, 'RUNNING')
+
+    async def test_successive_late_messages_trigger_without_restarting_listener(self):
+        self.dm.ingest('22', [message('100', age=120)])
+        with patch('bili_agent.messaging.POLL_INTERVAL', 3600), patch('bili_agent.messaging.MIN_SEND_INTERVAL', 0):
+            await self.dm.start()
+            for index in range(3):
+                self.dm.ingest('22', [message(str(101 + index), age=90 - index)])
+                async with asyncio.timeout(2):
+                    while len(self.platform.sent) <= index:
+                        await asyncio.sleep(.005)
+            self.assertEqual(len(self.model.calls), 3)
+            self.assertEqual(self.dm.state, 'RUNNING')
+            self.assertFalse(self.dm.status()['incoming'][0]['before_listener'])
+
+    async def test_restart_recovers_unanswered_turn_after_previous_reply(self):
+        self.dm.ingest('22', [message('100', age=120), message('101', age=90)])
+        with self.store.db:
+            self.store.db.execute("UPDATE dm_messages SET state='drafted' WHERE msg_key='100'")
+        await self.dm.start()
+        async with asyncio.timeout(2):
+            while not self.platform.sent:
+                await asyncio.sleep(.005)
+        self.assertEqual(self.model.calls[0][1]['reply_to']['msg_key'], '101')
+
+    async def test_invalid_reply_does_not_stop_later_conversation(self):
+        original = self.model.generate
+        async def broken(purpose, system, text):
+            if json.loads(text).get('reply_to', {}).get('msg_key') == '101':
+                return 'not json'
+            return await original(purpose, system, text)
+        self.model.generate = broken
+        with patch('bili_agent.messaging.POLL_INTERVAL', .005), patch('bili_agent.messaging.MIN_SEND_INTERVAL', 0):
+            await self.dm.start()
+            self.platform.inbox = [message('101', age=0)]
+            async with asyncio.timeout(2):
+                while not self.platform.sent:
+                    await asyncio.sleep(.005)
+            self.platform.inbox.append(message('102', age=0))
+            async with asyncio.timeout(2):
+                while len(self.platform.sent) < 2:
+                    await asyncio.sleep(.005)
+            self.assertEqual(self.dm.state, 'RUNNING')
+
+    async def test_uncertain_send_keeps_listening_without_resending_it(self):
+        with patch('bili_agent.messaging.POLL_INTERVAL', .005), patch('bili_agent.messaging.MIN_SEND_INTERVAL', 0):
+            self.platform.fail_send = True
+            await self.dm.start()
+            self.platform.inbox = [message('101', age=0)]
+            async with asyncio.timeout(2):
+                while not self.platform.sent:
+                    await asyncio.sleep(.005)
+            self.platform.fail_send = False
+            self.platform.inbox.append(message('102', age=0))
+            async with asyncio.timeout(2):
+                while len(self.platform.sent) < 2:
+                    await asyncio.sleep(.005)
+            self.assertEqual(self.dm.state, 'RUNNING')
+            self.assertEqual(self.store.db.execute("SELECT state FROM dm_outbox WHERE source_key='101'").fetchone()[0], 'uncertain')
 
     async def test_memory_summary_does_not_block_new_inbox_checks(self):
         entered = asyncio.Event()

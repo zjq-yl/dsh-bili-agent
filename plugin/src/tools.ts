@@ -186,7 +186,7 @@ export function registerTools(
     name: 'bili_agent_automation', description: '查看或设置开机私信监听、北京时间刷视频时段、每轮数量、三档评价、自动推荐与点赞收藏开关。只按账号主人要求改配置。',
     parameters: {
       action: { type: 'string', required: true, description: 'status/configure/folders' },
-      config_json: { type: 'string', description: 'configure的JSON配置：dm_auto_start、scheduled、start_time、end_time、rounds、per_round、request_enabled、actions_enabled、proactive_enabled、share_cards、favorite_folder、max_video_seconds；省略字段保持原值。模型调用次数不设本地上限。' },
+      config_json: { type: 'string', description: 'configure的JSON配置：dm_auto_start、scheduled、start_time、end_time、rounds、per_round、request_enabled、actions_enabled、proactive_enabled、share_cards、favorite_folder、max_video_seconds、comments_enabled、comment_daily_limit（0至10，默认3）；省略字段保持原值。视频Agent主动推荐，聊天Agent负责好友点播及公开评论。' },
     },
     output: textOutput,
     async execute(args, exec: ExecutionContext) {

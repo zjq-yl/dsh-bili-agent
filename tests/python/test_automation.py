@@ -80,6 +80,7 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         await self.auto.close()
+        await self.auto.interaction.close()
         await self.runner.pause()
         await self.dm.close()
         self.store.close()
@@ -170,6 +171,7 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         self.auto.request('22', '101', {'keyword': '学习方法', 'count': 1})
         for _ in range(5):
             await self.auto.tick()
+            await self.auto.interaction.tick()
         self.assertEqual(self.platform.searches, [])
         self.assertEqual(self.auto.status()['jobs'][0]['state'], 'complete')
         self.assertIn(video['bvid'], self.platform.sent[0]['text'])
@@ -183,6 +185,7 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         key = self.auto.request('22', '101', {'keyword': 'Python', 'count': 2})['id']
         for _ in range(20):
             await self.auto.tick()
+            await self.auto.interaction.tick()
             await asyncio.sleep(.005)
             if self.auto.status()['jobs'][0]['state'] == 'delivering':
                 break
@@ -237,6 +240,7 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         with patch('bili_agent.messaging.MIN_SEND_INTERVAL', 0):
             for _ in range(30):
                 await self.auto.tick()
+                await self.auto.interaction.tick()
                 await asyncio.sleep(.005)
                 if self.auto.status()['jobs'][0]['state'] == 'complete':
                     break
@@ -267,7 +271,9 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         self.friend()
         row = await self.video()
         await self.auto.review(row)
+        self.auto.interaction.prepare_results()
         await self.auto.review(row)
+        self.auto.interaction.prepare_results()
         self.assertEqual(self.auto.assessment(row['id'])['rating'], '值得看')
         self.assertEqual(len(self.social.status()['recommendations']), 1)
         self.assertEqual(len(self.dm.status()['outbox']), 2)
@@ -280,6 +286,7 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         self.model.rating = '可以看'
         other = self.store.db.execute('SELECT v.*,e.created FROM videos v JOIN experiences e ON e.video_id=v.id WHERE v.id=?', (key,)).fetchone()
         await self.auto.review(other)
+        self.auto.interaction.prepare_results()
         self.assertEqual(len(self.social.status()['recommendations']), 1)
         self.assertEqual(self.auto.assessment(key)['rating'], '可以看')
 
@@ -287,18 +294,19 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         self.friend()
         row = await self.video()
         await self.auto.review(row)
-        await self.auto.send_pending()
+        self.auto.interaction.prepare_results()
+        await self.auto.interaction.send_pending()
         self.assertEqual(self.platform.cards, [])
         with patch('bili_agent.messaging.MIN_SEND_INTERVAL', 0):
             await self.social.tick()
-            await self.auto.send_pending()
-            await self.auto.send_pending()
+            await self.social.tick()
+            await self.social.tick()
         self.assertEqual(len(self.platform.sent), 1)
         self.assertEqual(len(self.platform.cards), 1)
         self.assertIn('https://www.bilibili.com/video/', self.platform.sent[0]['text'])
-        await self.auto.perform_action()
+        await self.auto.interaction.perform_action()
         self.assertEqual(len(self.platform.actions), 1)
-        await self.auto.perform_action()
+        await self.auto.interaction.perform_action()
         self.assertEqual(len(self.platform.actions), 1)
 
     async def test_invented_peer_cannot_create_outbox_or_actions(self):
@@ -307,6 +315,7 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         row = await self.video()
         with self.assertRaisesRegex(RpcError, 'INVALID_VIDEO_DECISION'):
             await self.auto.review(row)
+            self.auto.interaction.prepare_results()
         self.assertEqual(self.dm.status()['outbox'], [])
         self.assertEqual(self.auto.status()['actions'], [])
 
@@ -322,10 +331,11 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         with patch('bili_agent.messaging.MIN_SEND_INTERVAL', 0):
             for _ in range(100):
                 await self.auto.tick()
+                await self.auto.interaction.tick()
                 await asyncio.sleep(.005)
                 if self.auto.status()['jobs'][0]['state'] == 'complete':
                     break
-            await self.auto.send_pending()
+            await self.auto.interaction.send_pending()
         job = self.auto.status()['jobs'][0]
         self.assertEqual(job['state'], 'complete')
         self.assertLess(job['round_index'], 3)
@@ -337,8 +347,9 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_send_cooldown_does_not_block_review_or_result_creation(self):
         row = await self.video()
-        with patch.object(self.auto, 'send_pending', AsyncMock(side_effect=RpcError(-32040, 'DM_SEND_LIMIT'))):
+        with patch.object(self.auto.interaction, 'send_pending', AsyncMock(side_effect=RpcError(-32040, 'DM_SEND_LIMIT'))):
             await self.auto.tick()
+            await self.auto.interaction.tick()
         self.assertEqual(self.auto.assessment(row['id'])['rating'], '值得看')
         self.assertEqual(self.auto.status()['delivery_error'], 'DM_SEND_LIMIT')
 
@@ -350,6 +361,7 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         self.dm.ingest('22', [message()])
         key = self.auto.request('22', '101', {'keyword': 'Python', 'count': 2})['id']
         await self.auto.tick()
+        await self.auto.interaction.tick()
         job = self.auto.status()['jobs'][0]
         self.assertEqual(job['id'], key)
         self.assertEqual(job['state'], 'browsing')
@@ -363,11 +375,13 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         key = self.auto.request('22', '101', {'keyword': 'Python', 'count': 1})['id']
         job = self.store.db.execute('SELECT * FROM browse_jobs WHERE id=?', (key,)).fetchone()
         await self.auto.finish_request(job)
+        self.auto.interaction.prepare_results()
         self.assertEqual(self.auto.status()['jobs'][0]['state'], 'delivering')
-        await self.auto.send_pending()
+        await self.auto.interaction.send_pending()
         self.assertEqual(self.auto.status()['jobs'][0]['state'], 'complete')
         self.auto = Automation(self.store, self.runner, self.dm, self.social, self.platform, self.model, self.directory)
         await self.auto.tick()
+        await self.auto.interaction.tick()
         self.assertEqual(len(self.platform.sent), 1)
 
     async def test_no_matching_video_still_returns_a_final_reply(self):
@@ -377,6 +391,7 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         self.auto.request('22', '101', {'keyword': 'Python', 'count': 1})
         for _ in range(20):
             await self.auto.tick()
+            await self.auto.interaction.tick()
             await asyncio.sleep(.005)
             if self.auto.status()['jobs'][0]['state'] == 'complete':
                 break
@@ -396,6 +411,7 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         key = self.auto.request('22', '101', {'keyword': 'Python', 'count': 1})['id']
         row = await self.video()
         await self.auto.review(row)
+        self.auto.interaction.prepare_results()
         with self.store.db:
             self.store.db.execute('INSERT INTO browse_items VALUES(?,?,?,NULL)', (key, row['bvid'], row['id']))
         model = AsyncMock(return_value='{"recommendations":[]}')
@@ -409,6 +425,7 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         self.friend()
         row = await self.video()
         await self.auto.review(row)
+        self.auto.interaction.prepare_results()
         original = self.social.status()['recommendations'][0]['draft_id']
         with patch('bili_agent.messaging.MIN_SEND_INTERVAL', 0):
             await self.dm.publish(original)
@@ -426,10 +443,11 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         self.dm.ingest('22', [message()])
         key = self.auto.request('22', '101', {'keyword': 'Python', 'count': 1})['id']
         await self.auto.finish_request(self.store.db.execute('SELECT * FROM browse_jobs WHERE id=?', (key,)).fetchone())
+        self.auto.interaction.prepare_results()
         with self.store.db:
             self.store.db.execute("UPDATE dm_outbox SET state='uncertain',error='SEND_RECEIPT_MISSING'")
-        self.auto.update_deliveries()
-        await self.auto.send_pending()
+        self.auto.interaction.update_deliveries()
+        await self.auto.interaction.send_pending()
         job = self.auto.status()['jobs'][0]
         self.assertEqual(job['state'], 'delivering')
         self.assertEqual(job['error'], 'DM_SEND_UNCERTAIN')
@@ -447,6 +465,7 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
     async def test_default_boot_listens_but_manual_stop_is_respected(self):
         (self.directory / 'credentials.json').write_text('{}')
         self.auto.start()
+        self.auto.interaction.start()
         async with asyncio.timeout(2):
             while self.dm.state != 'RUNNING':
                 await asyncio.sleep(.005)
@@ -461,17 +480,18 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         row = await self.video()
         self.model.rating = '没必要看'
         await self.auto.review(row)
+        self.auto.interaction.prepare_results()
         request = self.platform.request
         async def no_token(operation, params):
             if operation == 'video_action':
                 raise RpcError(-32010, 'DISLIKE_REQUIRES_APP_TOKEN')
             return await request(operation, params)
         self.platform.request = no_token
-        await self.auto.perform_action()
+        await self.auto.interaction.perform_action()
         self.assertEqual(self.auto.status()['actions'][0]['state'], 'local_only')
         with self.store.db:
             self.store.db.execute("UPDATE video_actions SET state='sending'")
         self.auto = Automation(self.store, self.runner, self.dm, self.social, self.platform, self.model, self.directory)
-        await self.auto.perform_action()
+        await self.auto.interaction.perform_action()
         self.assertEqual(self.auto.status()['actions'][0]['state'], 'uncertain')
         self.assertEqual(self.platform.actions, [])

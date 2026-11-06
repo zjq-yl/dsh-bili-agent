@@ -404,7 +404,7 @@ function ratingBadge(rating) {
 const autoFields = { scheduled: 'auto-scheduled', dm_auto_start: 'auto-dm', request_enabled: 'auto-request',
   proactive_enabled: 'auto-proactive', share_cards: 'auto-share', actions_enabled: 'auto-actions',
   start_time: 'auto-start', end_time: 'auto-end', rounds: 'auto-rounds', per_round: 'auto-per-round',
-  favorite_folder: 'auto-folder', max_video_seconds: 'auto-duration' }
+  favorite_folder: 'auto-folder', max_video_seconds: 'auto-duration', comments_enabled: 'auto-comments', comment_daily_limit: 'auto-comment-limit' }
 function renderAutomation(auto) {
   if (!auto) return
   if (!automationLoaded) {
@@ -419,7 +419,7 @@ function renderAutomation(auto) {
   $('automation-health').textContent = auto.error ? `自动任务：${explain(auto.error)}` : '运行设置已同步。DSH 完全退出时，自动任务也会停止。'
   const reviews = auto.assessments || []
   for (const [id, rating] of [['count-worth', '值得看'], ['count-okay', '可以看'], ['count-skip', '没必要看']]) $(id).textContent = reviews.filter(item => item.assessment.rating === rating).length
-  const states = { queued: '等待探索', browsing: '正在选片与分析', waiting: '等待分析与评价', delivering: '结果已生成 · 等待发送', complete: '处理完成', expired: '时段已过', failed: '需要处理' }
+  const states = { queued: '等待探索', browsing: '正在选片与分析', waiting: '等待分析与评价', result_ready: '视频 Agent 已交接结果', delivering: '互动 Agent 正在投递', complete: '处理完成', expired: '时段已过', failed: '需要处理' }
   $('browse-jobs').replaceChildren(...auto.jobs.map(job => {
     const card = document.createElement('article'); card.className = 'job-card'
     const top = document.createElement('div'); top.className = 'draft-top'; top.append(text('strong', job.kind === 'request' ? `好友请求 · UID ${job.peer}` : '定时浏览'), badge(states[job.state] || job.state))
@@ -475,8 +475,25 @@ navigate(pages[fragment] ? fragment : 'overview')
 
 Object.assign(errors, { VIDEO_NOT_READY_FOR_REANALYSIS: '视频正在处理中，请完成或暂停后再查看状态', VIDEO_PART_CHANGED: '分P信息已变化，请重新添加正确的视频链接', RECOMMENDATION_CARD_EXPIRED: '附加卡片已跨天，未继续发送', DM_SEND_INTERVAL: '等待私信发送冷却', DM_DAILY_LIMIT: '旧版本的聊天日上限已取消，请重载插件', VIDEO_PAUSED: '视频处理已暂停，点击开始 / 继续分析恢复', RECIPIENT_NOT_ENABLED: '接收者不在允许发送范围', DM_SEND_UNCERTAIN: '发送结果待确认，请到 B 站核对；不会自动重复发送', VIDEO_EXCEEDS_AUTOMATION_DURATION: '超过自动选片时长上限', NO_SUBTITLE_URL: '没有可用字幕地址', INVALID_RECOMMENDATION_SELECTION: '推荐选择输出不合规，任务保留等待处理' })
 function renderLive(data) {
+  const agents = data.agents || {}
+  $('agent-status').replaceChildren(...[
+    ['视频 Agent', agents.video, '定时浏览、总结、三档评价、主动推荐视频'],
+    ['聊天 Agent', agents.interaction, '事件回复、好友点播协作、公开评论；不主动推送视频'],
+  ].map(([name, agent, duties]) => {
+    const card = document.createElement('article'); card.className = 'job-card'
+    card.append(text('h3', name), badge(agent?.state || '待重载'), text('p', duties, 'subtle'))
+    if (agent?.error) card.append(text('p', explain(agent.error), 'error'))
+    return card
+  }))
+  const commentStates = { queued: '等待判断', analyzing: '判断是否评论', planned: '等待发表', skipped: '决定不评论', sent: '已发表', uncertain: '待核对，不重发', failed: '生成失败', cancelled: '已取消' }
+  $('public-comments').replaceChildren(...(agents.interaction?.comments || []).map(item => {
+    const card = document.createElement('article'); card.className = 'job-card'
+    card.append(videoLink(item.bvid), badge(commentStates[item.state] || item.state), text('p', item.text || item.reason || '等待处理'))
+    if (item.error) card.append(text('p', explain(item.error), 'error'))
+    return card
+  }))
   const auto = data.automation, dm = data.messaging
-  const active = [data.agent?.activity, auto?.activity].filter(Boolean)
+  const active = [data.agent?.activity, auto?.activity, agents.interaction?.activity].filter(Boolean)
   const modelNames = { segment_summary: '分段总结', notes_summary: '合并分段笔记', video_summary: '最终总结', video_decision: '视频评价与好友匹配', requested_recommendations: '挑选请求结果', dm_reply: '生成私信回复', dm_summary: '整理对话记忆', check: '模型连接检查' }
   for (const call of data.recent_model_calls || []) if (call.state === 'running') active.push({ message: `模型正在处理：${modelNames[call.purpose] || call.purpose}`, started: call.started })
   $('live-activity').replaceChildren(...active.map(item => {

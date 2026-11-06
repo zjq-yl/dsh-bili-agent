@@ -14,6 +14,7 @@ class Model:
         self.active = False
         self.waiters = []
         self.sequence = 0
+        self.reply_lock = asyncio.Lock()
 
     @asynccontextmanager
     async def turn(self, purpose: str):
@@ -36,13 +37,13 @@ class Model:
                 self.condition.notify_all()
 
     async def generate(self, purpose: str, system: str, text: str) -> str:
-        """Request one serialized model call and persist its outcome."""
+        """Serialize replies independently from background analysis (at most two calls)."""
         if len(system) + len(text) > 48000:
             raise RpcError(-32602, "MODEL_INPUT_TOO_LARGE")
-        async with self.turn(purpose):
+        async with (self.reply_lock if purpose == 'dm_reply' else self.turn(purpose)):
             call_id = self.store.reserve_call(purpose)
             try:
-                result = await self.peer.call("model.generate", {"system": system, "text": text}, timeout=65)
+                result = await self.peer.call("model.generate", {"system": system, "text": text, "purpose": purpose}, timeout=65)
                 if not isinstance(result, dict) or not isinstance(result.get("text"), str) or not result["text"].strip():
                     raise RpcError(-32006, "INVALID_MODEL_RESULT")
                 self.store.finish_call(call_id, "completed", result.get("usage"))

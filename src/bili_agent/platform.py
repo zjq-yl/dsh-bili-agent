@@ -61,19 +61,25 @@ class Platform:
     def __init__(self, data_dir):
         self.data_dir = data_dir
         self.lock = asyncio.Lock()
+        self.dm_lock = asyncio.Lock()
+        self.rate_lock = asyncio.Lock()
         self.next_request = 0
         self.last_status = "unverified"
 
     async def request(self, operation, params):
-        async with self.lock:
-            delay = self.next_request - time.monotonic()
-            if delay > 0:
-                await asyncio.sleep(delay)
+        # Private messaging must not wait for a slow video fetch. All starts still share a rate gate.
+        lane = self.dm_lock if operation in ('identity', 'sessions', 'messages', 'send_dm', 'share_video', 'video_action', 'send_comment') else self.lock
+        async with lane:
+            async with self.rate_lock:
+                delay = self.next_request - time.monotonic()
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                self.next_request = time.monotonic() + 3
             try:
                 async with asyncio.timeout(60):
                     handlers = {"search": self.search, "fetch": self.fetch, "audio": self.audio, 'metadata': self.metadata,
                                 "identity": self.identity, "sessions": self.sessions, "messages": self.messages,
-                                "send_dm": self.send_dm, "share_video": self.share_video,
+                                "send_dm": self.send_dm, "share_video": self.share_video, 'send_comment': self.send_comment,
                                 "video_action": self.video_action, "favorite_folders": self.favorite_folders}
                     if operation not in handlers:
                         raise RpcError(-32601, "UNKNOWN_PLATFORM_OPERATION")
@@ -96,8 +102,6 @@ class Platform:
                 else:
                     self.last_status = {-101: "LOGIN_REQUIRED", -412: "PLATFORM_CHALLENGE", -404: "VIDEO_UNAVAILABLE"}.get(code, "PLATFORM_REQUEST_FAILED")
                 raise RpcError(-32010, self.last_status) from None
-            finally:
-                self.next_request = time.monotonic() + 3
 
     def credential(self):
         from bilibili_api import Credential
@@ -130,6 +134,24 @@ class Platform:
         try:
             return await session.send_msg(credential=credential, receiver_id=int(params["peer_uid"]),
                                           msg_type=session.EventType.TEXT, content=params["text"])
+        finally:
+            request_settings.set_wbi_retry_times(previous)
+
+    async def send_comment(self, params: dict) -> dict:
+        """Send one top-level public comment; unknown receipts must never be replayed."""
+        from bilibili_api import comment, video
+        from bilibili_api.utils.network import request_settings
+        text, bvid = params.get('text'), params.get('bvid')
+        if (not isinstance(text, str) or not 1 <= len(text.strip()) <= 300
+                or not isinstance(bvid, str) or not re.fullmatch(r'BV[0-9A-Za-z]{10}', bvid)):
+            raise RpcError(-32602, 'INVALID_PUBLIC_COMMENT')
+        credential = self.credential()
+        previous = request_settings.get_wbi_retry_times()
+        request_settings.set_wbi_retry_times(1)
+        try:
+            response = await comment.send_comment(text.strip(), video.Video(bvid=bvid).get_aid(),
+                comment.CommentResourceType.VIDEO, credential=credential)
+            return {'rpid': str(response.get('rpid') or (response.get('reply') or {}).get('rpid') or '')}
         finally:
             request_settings.set_wbi_retry_times(previous)
 

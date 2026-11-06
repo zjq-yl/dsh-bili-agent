@@ -15,7 +15,7 @@ from .protocol import Peer, RpcError
 from .runner import Runner
 from .store import Store
 from .social import Social
-from .automation import Automation
+from .automation import VideoAgent
 from .library import browse as browse_library
 from .content import validate_video
 
@@ -49,6 +49,9 @@ class Runtime:
                     "messaging": self.messaging.status(),
                     "social": self.social.status(),
                     "automation": self.automation.status(),
+                    "agents": {"video": {"name": "视频 Agent", "state": 'RUNNING' if self.automation.task and not self.automation.task.done() else 'STOPPED',
+                        "analysis_state": self.runner.state, "activity": self.automation.activity,
+                        "proactive_video_push": self.automation.config['proactive_enabled']}, "interaction": self.automation.interaction.status()},
                     "events": self.store.events(),
                     "recent_model_calls": self.store.call_status()}
         if method == "agent.status":
@@ -131,6 +134,7 @@ class Runtime:
         if method == "model.check":
             return {"text": await self.model.generate("check", "请简短回答。", "只输出：模型连接正常")}
         if method == "worker.shutdown":
+            await self.automation.interaction.close()
             await self.automation.close()
             await self.runner.pause()
             await self.social.close()
@@ -163,13 +167,13 @@ class Runtime:
             self.social = Social(self.store, self.messaging)
             self.social.model_driven = True
             self.messaging.friends = self.social
-            self.automation = Automation(self.store, self.runner, self.messaging, self.social, self.platform, self.model, self.data_dir)
+            self.automation = VideoAgent(self.store, self.runner, self.messaging, self.social, self.platform, self.model, self.data_dir)
             self.social.proactive_enabled = self.automation.config['proactive_enabled']
             self.messaging.recommendations = self.automation
             self.runner.assessment = self.automation.assessment
             self.runner.on_complete = self.automation.wake.set
-            self.social.start()
             self.automation.start()
+            self.automation.interaction.start()
         self.ready = True
         return {"protocol_version": 1, "worker_version": __version__, "pid": os.getpid()}
 
@@ -217,6 +221,7 @@ class Runtime:
     async def close(self) -> None:
         try:
             if self.automation:
+                await self.automation.interaction.close()
                 await self.automation.close()
             if self.runner:
                 await self.runner.pause()
