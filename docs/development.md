@@ -21,6 +21,8 @@ DSH
 
 控制面板静态资源在 `plugin/panel/`，`plugin/src/panel.ts` 只负责本机 HTTP、认证及转发已有 RPC；不另建 worker，不直接调用 B 站或模型。好友档案和推荐规则在 `src/bili_agent/social.py`；视频完成后唤醒处理，SQLite 经历记录作为可恢复的事件来源，发送共用私信队列、额度和去重。
 
+前端浏览器验收：先运行 `node scripts/build.mjs`，再运行 `node tests/node/panel-ui-smoke.mjs`。默认使用 Windows Edge，可通过环境变量 `BILI_TEST_BROWSER` 指定 Chromium 可执行文件。测试使用临时本地服务和合成数据，封面由浏览器请求拦截提供，不访问真实账号、模型或 B 站。覆盖导航、五列视频历史、详情弹窗、搜索分页、任务入队、时间预览与保存、实时更新、断线重连和360/390px布局；截图输出到被忽略的 `data/ui-checks/`，带合成数据标记。
+
 `legacy/comment_bot/` 保留早期评论原型及独立依赖，正式插件不导入它。`dist/` 是构建输出；不要在其中修改代码。两份设计 DOCX 仍留在根目录，修订始终写回现有修订版文件。
 
 ## 代码规则

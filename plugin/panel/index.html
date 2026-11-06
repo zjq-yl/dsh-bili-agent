@@ -6,14 +6,15 @@
   <script src="/panel.js" defer></script>
 </head>
 <body>
+  <a class="skip-link" href="#page-title">跳到主要内容</a>
   <aside class="sidebar">
-    <div class="brand"><span class="brand-icon" aria-hidden="true">黎</span><span>小黎的工作台<small>BILIBILI WORKSPACE</small></span></div>
+    <div class="brand"><span class="brand-icon"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="m15 4 7 8m11-8-7 8"/><rect x="5" y="13" width="38" height="27" rx="7"/><path d="m14 23 5 2m15-2-5 2M20 31l4 3 4-3M13 40v3m22-3v3"/></svg></span><span>小黎的工作台<small>BILIBILI AGENT</small></span></div>
     <nav aria-label="页面导航">
-<p class="nav-label">工作台</p>
-<a class="active" href="#overview"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg><span>概览</span></a>
-<a href="#videos"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3z"/></svg><span>视频库</span></a>
+<p class="nav-label">内容中心</p>
+<a class="active" href="#overview"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg><span>工作台</span></a>
+<a href="#videos"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3z"/></svg><span>视频历史</span></a>
 <a href="#automation"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>浏览与推荐</span></a>
-<p class="nav-label">交流</p>
+<p class="nav-label">互动中心</p>
 <a href="#messages"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H9l-6 3V6a2 2 0 0 1 2-2Z M7 9h10M7 13h6"/></svg><span>私信会话</span></a>
 <a href="#friends-section"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M17 5a3 3 0 0 1 0 6M18 14a5 5 0 0 1 3 4v3"/></svg><span>好友</span></a>
 <a href="#actions"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18H6zM9 8h6M9 12h6M9 16h4"/></svg><span>公开互动</span></a>
@@ -25,41 +26,60 @@
   </aside>
   <main>
     <header><div><p class="breadcrumb">工作台 <span aria-hidden="true">/</span> <span id="page-label">概览</span></p><h1 id="page-title">运行概览</h1><p class="subtle" id="page-description">账号状态、今日计划与处理进度。</p></div><div class="header-tools"><span id="connection" class="badge neutral">连接中</span><button id="refresh" class="secondary">刷新</button></div></header>
+    <div id="connection-alert" class="connection-alert" role="status" hidden><span>正在重新连接，当前内容可能不是最新状态。</span><button id="retry-connection" type="button" class="secondary">重新连接</button></div>
     <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
     <section id="overview">
-      <div class="workspace-intro"><div><p class="eyebrow">Agent 状态</p></div><span id="workspace-date" class="subtle"></span></div>
+      <div class="workspace-intro"><div><p class="eyebrow">我的工作空间</p></div><span id="workspace-date" class="subtle"></span></div>
+      <div class="welcome-card">
+        <div class="welcome-copy"><p class="eyebrow">HELLO, BILIBILI</p><h2>今天，也发现一点新喜欢。</h2><p>把浏览交给小黎，把值得看的内容留给你。</p><div class="welcome-actions"><a class="primary-link" href="#videos" data-focus="video-input">＋ 添加视频</a><a class="welcome-secondary" href="#videos">查看视频历史 →</a></div></div>
+        <div class="welcome-tv" aria-hidden="true"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="m15 4 7 8m11-8-7 8"/><rect x="5" y="13" width="38" height="27" rx="7"/><path d="m14 23 5 2m15-2-5 2M20 31l4 3 4-3M13 40v3m22-3v3"/></svg><span>干杯，今天的好内容！</span></div>
+      </div>
       <div id="agent-status" class="agent-grid">
-        <article class="agent-card"><div class="agent-card-top"><span class="agent-mark">01</span><span id="video-agent-badge" class="badge neutral">读取中</span></div><h2>视频 Agent</h2><p class="agent-caption">定时浏览 · 总结分类 · 主动推荐</p><p id="video-agent-summary" class="agent-summary">正在读取浏览计划…</p><div class="agent-links"><a href="#videos" class="inline-route">打开视频库 <span>↗</span></a><a href="#automation" class="inline-route">浏览与推荐 →</a></div></article>
-        <article class="agent-card"><div class="agent-card-top"><span class="agent-mark">02</span><span id="chat-agent-badge" class="badge neutral">读取中</span></div><h2>聊天 Agent</h2><p class="agent-caption">私信回复 · 好友点播 · 公开评论</p><p id="chat-agent-summary" class="agent-summary">正在读取消息状态…</p><div class="agent-links"><a href="#messages" class="inline-route">打开私信会话 <span>↗</span></a><a href="#friends-section" class="inline-route">管理好友 →</a></div></article>
+        <article class="agent-card"><div class="agent-card-top"><span class="agent-mark">内容发现 / VIDEO</span><span id="video-agent-badge" class="badge neutral">读取中</span></div><h2>视频 Agent</h2><p class="agent-caption">定时浏览 · 总结分类 · 主动推荐</p><p class="agent-task" id="video-agent-task">等待读取任务</p><p id="video-agent-summary" class="agent-summary">正在读取浏览计划…</p><div class="agent-links"><a href="#videos" class="inline-route">打开视频库 <span>↗</span></a><a href="#automation" class="inline-route">浏览与推荐 →</a></div></article>
+        <article class="agent-card"><div class="agent-card-top"><span class="agent-mark">消息互动 / CHAT</span><span id="chat-agent-badge" class="badge neutral">读取中</span></div><h2>聊天 Agent</h2><p class="agent-caption">私信回复 · 好友点播 · 公开评论</p><p class="agent-task" id="chat-agent-task">等待读取任务</p><p id="chat-agent-summary" class="agent-summary">正在读取消息状态…</p><div class="agent-links"><a href="#messages" class="inline-route">打开私信会话 <span>↗</span></a><a href="#friends-section" class="inline-route">管理好友 →</a></div></article>
       </div>
       <div class="overview-grid">
-        <article class="day-card"><div><p class="eyebrow">今日浏览安排 / 北京时间</p><h2 id="daily-window">—</h2><p id="daily-detail">等待读取计划</p><div id="daily-slots" class="slot-list"></div></div><div class="day-note"><p id="recommendation-readiness" class="hint"></p><a href="#automation" class="inline-route">调整浏览计划 →</a></div></article>
-        <article class="card live-card"><div class="section-heading"><h2>正在处理</h2><span class="live-dot">实时</span></div><div id="live-activity"></div><details class="activity-details"><summary>发送与模型统计</summary><p id="send-progress" class="hint"></p><p id="model-progress" class="subtle"></p></details><div id="live-requests" class="job-grid"></div></article>
+        <article class="day-card"><div><div class="section-heading compact"><h2>今日浏览计划</h2><span class="badge neutral">北京时间</span></div><p id="daily-window" class="daily-window">—</p><p id="daily-detail">等待读取计划</p><div id="daily-slots" class="slot-list"></div></div><div class="day-note"><p id="recommendation-readiness" class="hint"></p><a href="#automation" class="inline-route">调整浏览计划 →</a></div></article>
+        <article class="card live-card"><div class="section-heading"><h2>正在处理</h2><span id="live-indicator" class="live-dot">连接中</span></div><div id="live-activity"></div><details class="activity-details"><summary>发送与模型统计</summary><p id="send-progress" class="hint"></p><p id="model-progress" class="subtle"></p></details><div id="live-requests" class="job-grid"></div></article>
       </div>
       <div class="section-heading compact"><h2>最近视频评价</h2><a href="#videos" class="inline-route">全部视频 →</a></div>
     <div class="rating-overview"><article><span class="rating-dot worth"></span><strong id="count-worth">0</strong><span>值得看</span><small>有明确价值，择优推荐</small></article><article><span class="rating-dot okay"></span><strong id="count-okay">0</strong><span>可以看</span><small>留下摘要，按需回看</small></article><article><span class="rating-dot skip"></span><strong id="count-skip">0</strong><span>没必要看</span><small>记录原因，不主动推荐</small></article></div>
+      <article class="card recent-card"><div class="section-heading compact"><h2>近期活动</h2><a href="#logs" class="inline-route">全部运行记录 →</a></div><div id="recent-activity"><p class="empty">等待读取活动</p></div></article>
       <p id="automation-health" class="hint"></p>
     </section>
     <section id="automation" class="card" hidden>
-      <div class="section-heading"><div><h2>浏览计划</h2></div><span class="badge neutral">北京时间</span></div>
-      <form id="automation-form"><div class="setting-grid"><fieldset><legend>每日浏览</legend><label>选片来源<select id="auto-source"><option value="popular_first">热门优先，不足时按兴趣搜索</option><option value="search">按兴趣搜索</option></select></label><label class="check"><input id="auto-scheduled" type="checkbox">按计划浏览视频</label><div class="time-fields"><label>开始时间<input id="auto-start" type="time" required value="18:00"></label><label>结束时间<input id="auto-end" type="time" required value="21:00"></label></div><div class="time-fields"><label>轮数<input id="auto-rounds" type="number" min="1" max="6" value="3" required></label><label>每轮目标视频数<input id="auto-per-round" type="number" min="1" max="5" value="5" required></label></div><p class="subtle">轮次均匀分布在时段内。没有字幕或超时长的视频会跳过；候选不足时会如实显示。</p></fieldset><fieldset><legend>视频 Agent · 主动推荐</legend><label class="check"><input id="auto-proactive" type="checkbox">主动推荐“值得看”的视频</label><label class="check"><input id="auto-share" type="checkbox">特别合适时附加视频转发卡片</label><p class="subtle">只推荐“值得看”且符合好友兴趣的内容。每位好友每天最多 5 个；接收时间与数量在好友档案中设置。</p><a href="#friends-section" class="inline-route">管理接收好友 →</a></fieldset></div><details class="editor-panel"><summary>更多选片设置</summary><fieldset><legend>选片范围</legend><label>自动选择视频的最长秒数<input id="auto-duration" type="number" min="30" max="3600" value="600" required></label><p class="subtle">按时段、轮数、视频数和时长控制浏览量。模型调用仅统计，不设次数上限。</p></fieldset></details><div class="form-footer"><span class="subtle">只修改浏览与主动推荐设置</span><button type="submit" class="primary">保存浏览计划</button></div></form>
-      <div class="section-heading spaced"><h3>浏览记录</h3><span class="subtle">包含定时任务和好友请求</span></div><div id="browse-jobs" class="job-grid"></div>
+<div class="page-tabs" role="tablist" aria-label="浏览与推荐分区"><button type="button" role="tab" id="tab-browse-plan" data-panel="browse-plan" aria-controls="browse-plan" aria-selected="true" tabindex="0">浏览计划</button><button type="button" role="tab" id="tab-browse-history" data-panel="browse-history" aria-controls="browse-history" aria-selected="false" tabindex="-1">执行记录</button></div><div id="browse-plan" role="tabpanel" aria-labelledby="tab-browse-plan" tabindex="0">
+      <form id="automation-form">
+        <div class="schedule-layout">
+          <fieldset class="schedule-editor"><legend>每日浏览时间</legend>
+            <div class="setting-title"><div><h3>给小黎安排一段探索时间</h3><p class="subtle">北京时间 · 每天重复</p></div><label class="switch"><input id="auto-scheduled" type="checkbox"><span>定时浏览</span></label></div>
+            <div class="time-range"><label>开始时间<input id="auto-start" type="time" required value="18:00"></label><span aria-hidden="true">—</span><label>结束时间<input id="auto-end" type="time" required value="21:00"></label></div>
+            <div class="time-presets" role="group" aria-label="快捷选择时间"><button type="button" data-start="09:00" data-end="12:00">上午 09—12</button><button type="button" data-start="14:00" data-end="17:00">下午 14—17</button><button type="button" data-start="18:00" data-end="21:00">晚间 18—21</button></div>
+            <div class="time-fields"><label>每天浏览几轮<input id="auto-rounds" type="number" min="1" max="6" value="3" required></label><label>每轮最多几个视频<input id="auto-per-round" type="number" min="1" max="5" value="5" required></label></div>
+            <div class="schedule-preview"><div class="draft-top"><strong>轮次预览</strong><span>保存后生效</span></div><p id="schedule-description" class="subtle" aria-live="polite"></p><div id="schedule-slots" class="slot-list"></div></div>
+            <label>从哪里发现视频<select id="auto-source"><option value="popular_first">热门优先，不足时按兴趣搜索</option><option value="search">按兴趣搜索</option></select></label>
+          </fieldset>
+          <fieldset class="recommend-settings"><legend>主动推荐</legend><h3>把好内容分享给好友</h3><p class="subtle">只推荐「值得看」且符合好友兴趣的视频。</p><label class="switch"><input id="auto-proactive" type="checkbox"><span>主动推荐视频</span></label><label class="switch"><input id="auto-share" type="checkbox"><span>合适时附加视频卡片</span></label><div class="settings-note"><h3>谁会收到推荐？</h3><p class="subtle">在好友档案中管理接收对象、兴趣和推送时间。每位好友每天最多 5 个视频。</p><a href="#friends-section" class="inline-route">管理接收好友 →</a></div><details class="editor-panel"><summary>选片时长限制</summary><label>视频最长秒数<input id="auto-duration" type="number" min="30" max="3600" value="600" required></label><p class="subtle">无可用内容或超过时长时会跳过；实际数量可能少于目标。</p></details></fieldset>
+        </div>
+        <div class="form-footer"><span class="subtle">修改后保存；后台任务使用已保存的计划。</span><button type="submit" class="primary">保存浏览计划</button></div>
+      </form></div><div id="browse-history" role="tabpanel" aria-labelledby="tab-browse-history" tabindex="0" hidden>      <div class="section-heading spaced"><h3>浏览记录</h3><span class="subtle">包含定时任务和好友请求</span></div><div id="browse-jobs" class="job-grid"></div></div>
     </section>
     <section id="videos" class="card" hidden>
-      <div class="section-heading"><div><h2>视频库</h2><p id="library-total" class="subtle">正在读取视频</p></div><a href="#video-add" id="add-video-shortcut" class="button-link">＋ 添加视频</a></div><form id="library-search" class="library-search"><label class="visually-hidden" for="library-query">搜索视频库</label><input id="library-query" type="search" maxlength="100" placeholder="搜索标题、UP 主或内容…"><button class="secondary" type="submit">搜索</button></form><div class="rating-tabs" role="group" aria-label="按视频评价筛选"><button type="button" data-rating="" aria-pressed="true">全部<span data-count="all">—</span></button><button type="button" data-rating="值得看" aria-pressed="false">值得看<span data-count="值得看">—</span></button><button type="button" data-rating="可以看" aria-pressed="false">可以看<span data-count="可以看">—</span></button><button type="button" data-rating="没必要看" aria-pressed="false">没必要看<span data-count="没必要看">—</span></button><button type="button" data-rating="unrated" aria-pressed="false">待评价<span data-count="unrated">—</span></button></div><input id="rating-filter" type="hidden" value=""><p id="cover-status" class="subtle" role="status"></p>
+<div class="page-tabs" role="tablist" aria-label="视频分区"><button type="button" role="tab" id="tab-video-history" data-panel="video-history" aria-controls="video-history" aria-selected="true" tabindex="0">视频历史</button><button type="button" role="tab" id="tab-video-tools" data-panel="video-tools" aria-controls="video-tools" aria-selected="false" tabindex="-1">添加与队列</button></div><div id="video-history" role="tabpanel" aria-labelledby="tab-video-history" tabindex="0">      <div class="section-heading"><div><h2>看过的，都在这里</h2><p id="library-total" class="subtle">正在读取视频</p></div><a href="#video-add" id="add-video-shortcut" class="button-link">＋ 添加视频</a></div><form id="library-search" class="library-search"><label class="visually-hidden" for="library-query">搜索视频库</label><input id="library-query" type="search" maxlength="100" placeholder="搜索标题、UP 主或内容…"><button class="secondary" type="submit">搜索</button></form><div class="rating-tabs" role="group" aria-label="按视频评价筛选"><button type="button" data-rating="" aria-pressed="true">全部<span data-count="all">—</span></button><button type="button" data-rating="值得看" aria-pressed="false">值得看<span data-count="值得看">—</span></button><button type="button" data-rating="可以看" aria-pressed="false">可以看<span data-count="可以看">—</span></button><button type="button" data-rating="没必要看" aria-pressed="false">没必要看<span data-count="没必要看">—</span></button><button type="button" data-rating="unrated" aria-pressed="false">待评价<span data-count="unrated">—</span></button></div><input id="rating-filter" type="hidden" value=""><p id="cover-status" class="subtle" role="status"></p>
       <div id="video-assessments" class="video-library" aria-live="polite"><p class="empty">正在读取视频…</p></div>
       <div class="library-pagination"><span id="library-page" class="subtle"></span><div><button id="library-prev" class="secondary" disabled>上一页</button><button id="library-next" class="secondary" disabled>下一页</button></div></div>
-      <details id="video-add" class="editor-panel"><summary>添加视频 / 按主题搜索</summary>
+      </div><div id="video-tools" role="tabpanel" aria-labelledby="tab-video-tools" tabindex="0" hidden><div id="video-add" class="video-add-card">
+      <div class="video-add-heading"><div><h3>添加视频</h3><p class="subtle">粘贴 BV 号或视频链接，将它加入总结队列。</p></div><span aria-hidden="true">▶</span></div>
       <form id="video-form" class="input-row"><label class="grow">视频 BV 号或链接<input id="video-input" placeholder="粘贴 B 站视频链接，或输入 BV 号" required></label><label class="page-input">分 P<input id="video-page" type="number" min="1" max="1000" value="1" required></label><button class="primary" type="submit">添加到队列</button></form>
       <div class="controls"><button id="resume" class="primary">开始 / 继续分析</button><button id="pause" class="secondary">暂停分析</button><span class="subtle">入队后点击开始；无字幕时可通过媒体工具获取音频并转写。</span></div>
+      </div>
       <details class="discovery"><summary>按主题自动找视频</summary><form id="discover-form" class="input-row"><label class="grow">感兴趣的主题<input id="keyword" placeholder="例如：Python 入门、天文科普" maxlength="100" required></label><button class="secondary" type="submit">开始发现</button></form><p class="subtle">每次最多搜索 3 轮。切换主题前先暂停分析。</p></details>
-      </details>
-      <details class="editor-panel"><summary>最近任务与错误</summary>
+      <details class="editor-panel" open><summary>分析队列与错误</summary>
       <div class="table-wrap"><table><thead><tr><th>任务 / 视频</th><th>状态</th><th>已分析片段</th><th>操作</th></tr></thead><tbody id="tasks"><tr><td colspan="4" class="empty">正在读取任务…</td></tr></tbody></table></div>
-      </details>
+      </details></div>
     </section>
     <section id="messages" class="card" hidden>
-      <div class="section-heading"><div><h2>消息监听</h2></div><span id="send-badge" class="badge neutral">读取中</span></div>
+      <div class="section-heading"><div><h2>私信收件箱</h2></div><span id="send-badge" class="badge neutral">读取中</span></div>
       <p id="dm-scope" class="subtle">正在读取允许回复的账号…</p>
       <div class="controls"><button id="listen-auto" class="primary">开启自动回复</button><button id="listen-stop" class="secondary">停止监听</button></div>
       <details class="editor-panel"><summary>监听与点播设置</summary><form id="chat-settings-form"><div class="setting-grid"><fieldset><legend>聊天 Agent</legend><label class="check"><input id="auto-dm" type="checkbox">DSH 启动后自动监听私信</label><label class="check"><input id="auto-request" type="checkbox">好友索要推荐时，主动找视频</label><p class="subtle">收到消息后触发回复；好友索要视频时，再向视频 Agent 请求结果。</p></fieldset><fieldset><legend>回复模式</legend><p class="subtle">需要先检查措辞时，可切换为仅生成草稿。</p><button id="listen-preview" type="button" class="secondary">切换为草稿模式</button></fieldset></div><div class="form-footer"><span class="subtle">不影响视频 Agent 的主动推荐</span><button type="submit" class="primary">保存聊天设置</button></div></form></details>
@@ -120,6 +140,6 @@
 </details><details class="log-panel" open><summary>运行日志 <span class="subtle">最近 100 条</span></summary><div id="runtime-log" class="runtime-log" aria-label="运行日志"></div></details></section>
     <footer>本地存储 · 字幕与音频分析 · <span id="version">开发版</span></footer>
   </main>
-  <dialog id="result-dialog"><div class="dialog-heading"><h2 id="result-title">视频总结</h2><button id="close-result" class="secondary" aria-label="关闭总结">关闭 ×</button></div><div id="result-body"></div></dialog>
+  <dialog id="result-dialog" aria-labelledby="result-title"><div class="dialog-heading"><h2 id="result-title">视频总结</h2><button id="close-result" class="secondary" aria-label="关闭总结">关闭 ×</button></div><div id="result-body"></div></dialog>
 </body>
 </html>
