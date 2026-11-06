@@ -1,0 +1,3 @@
+deepseek-harness-sdk
+bilibili-api-python>=17,<18
+aiohttp>=3.10,<4

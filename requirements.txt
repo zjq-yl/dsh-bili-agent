@@ -1,0 +1,2 @@
+# Default installation: subtitles, audio download, and private messaging.
+-r requirements/base.txt

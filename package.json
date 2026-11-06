@@ -1,0 +1,38 @@
+{
+  "name": "dsh-bili-agent",
+  "version": "0.1.0-dev.1",
+  "private": true,
+  "type": "module",
+  "description": "DSH B站自主浏览角色插件：Python业务核心与原生宿主接入",
+  "main": "./dist/host.js",
+  "exports": { ".": "./dist/host.js" },
+  "files": ["dist", "src/bili_agent", "fixtures", "requirements", "requirements.txt", "pyproject.toml", "scripts/setup-local.ps1", "scripts/check-runtime.py", "scripts/open-panel.ps1", "scripts/configure-desktop.py", "cordis.patch.yml", "README.md", "THIRD-PARTY-NOTICES.md", "docs"],
+  "engines": { "node": ">=22.18.0", "dsh": ">=0.2.1-rc.5 <0.3.0-0" },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.5",
+    "@deepseek-ai/dsh-tools": ">=0.2.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/dsh-llm": ">=0.2.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/schemastery": "^3.18.5"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh-agent-default-model": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.5",
+    "@deepseek-ai/schemastery": "3.18.5",
+    "@types/node": "^24.0.0",
+    "typescript": "6.0.3"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "local-patch": "node scripts/local-patch.mjs",
+    "pack:local": "python scripts/package.py",
+    "test": "python -m unittest discover -s tests -t . && node scripts/build.mjs && node --test tests/node/*.test.mjs",
+    "test:python": "python -m unittest discover -s tests -t .",
+    "test:node": "node scripts/build.mjs && node --test tests/node/*.test.mjs",
+    "lint:python": "python -m ruff check src tests scripts",
+    "format:python": "python -m ruff format src tests scripts"
+  },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}

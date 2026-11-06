@@ -1,0 +1,155 @@
+import sys
+import json
+import errno
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
+
+from bili_agent.platform import Platform, subtitle_url
+from bili_agent.protocol import RpcError
+
+
+class PlatformTests(unittest.IsolatedAsyncioTestCase):
+    async def test_video_card_uses_type_seven_and_platform_metadata(self):
+        captured = {}
+        class Api:
+            def __init__(self, **kwargs):
+                captured['api'] = kwargs
+            def update_params(self, **kwargs):
+                captured['params'] = kwargs
+                return self
+            def update_data(self, **kwargs):
+                captured['data'] = kwargs
+                return self
+            @property
+            async def result(self):
+                return {'msg_key': '12345'}
+        settings = SimpleNamespace(get_wbi_retry_times=Mock(return_value=3), set_wbi_retry_times=Mock())
+        sdk = SimpleNamespace(session=SimpleNamespace(API={'operate': {'send_msg': {'url': 'test', 'method': 'POST'}}}))
+        modules = {'bilibili_api': sdk, 'bilibili_api.utils': SimpleNamespace(),
+                   'bilibili_api.utils.network': SimpleNamespace(Api=Api, request_settings=settings)}
+        with tempfile.TemporaryDirectory() as directory, patch.dict(sys.modules, modules):
+            platform = Platform(Path(directory))
+            platform.credential = lambda: SimpleNamespace(raise_for_no_sessdata=lambda: None, raise_for_no_bili_jct=lambda: None)
+            platform.video_part = AsyncMock(return_value=(SimpleNamespace(get_aid=lambda: 170001),
+                {'title': '真实标题', 'pic': 'https://i0.hdslb.com/test.jpg', 'owner': {'name': '作者'}}, {}))
+            result = await platform.share_video({'account_uid': '77', 'peer_uid': '22', 'bvid': 'BV17x411w7KC'})
+            self.assertEqual(result['msg_key'], '12345')
+            self.assertEqual(captured['data']['msg[msg_type]'], 7)
+            card = json.loads(captured['data']['msg[content]'])
+            self.assertEqual((card['source'], card['title'], card['id']), (5, '真实标题', 170001))
+            self.assertEqual(captured['params']['w_receiver_id'], 22)
+            self.assertEqual([call.args[0] for call in settings.set_wbi_retry_times.call_args_list], [1, 3])
+
+    async def test_dislike_without_app_token_never_calls_like_false_and_favorite_uses_folder(self):
+        item = SimpleNamespace(like=AsyncMock(), set_favorite=AsyncMock(), get_aid=lambda: 1)
+        settings = SimpleNamespace(get_wbi_retry_times=Mock(return_value=3), set_wbi_retry_times=Mock())
+        modules = {'bilibili_api': SimpleNamespace(video=SimpleNamespace(Video=lambda **kwargs: item)),
+                   'bilibili_api.utils': SimpleNamespace(),
+                   'bilibili_api.utils.network': SimpleNamespace(Api=Mock(), request_settings=settings)}
+        with tempfile.TemporaryDirectory() as directory, patch.dict(sys.modules, modules):
+            platform = Platform(Path(directory))
+            platform.credential = lambda: object()
+            with self.assertRaisesRegex(RpcError, 'DISLIKE_REQUIRES_APP_TOKEN'):
+                await platform.video_action({'action': 'dislike', 'bvid': 'BV17x411w7KC'})
+            item.like.assert_not_called()
+            result = await platform.video_action({'action': 'favorite', 'bvid': 'BV17x411w7KC', 'folder_id': '123'})
+            self.assertTrue(result['accepted'])
+            item.set_favorite.assert_awaited_once_with(add_media_ids=[123])
+
+    async def test_network_permission_failure_is_distinct_from_login_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            platform = Platform(Path(directory))
+            platform.identity = AsyncMock(side_effect=PermissionError(errno.EACCES, 'restricted'))
+            with self.assertRaisesRegex(RpcError, '^NETWORK_ACCESS_DENIED$'):
+                await platform.request('identity', {})
+            self.assertEqual(platform.last_status, 'NETWORK_ACCESS_DENIED')
+
+    async def test_selects_requested_part_preserves_large_cid_and_prefers_manual_chinese(self):
+        calls = []
+        class Video:
+            def __init__(self, **kwargs):
+                calls.append(kwargs)
+
+            async def get_info(self):
+                return {"title": "测试分P", "pages": [{"page": 1, "cid": 1, "duration": 20},
+                                                     {"page": 2, "cid": 9007199254740993, "duration": 30}]}
+
+            async def get_subtitle(self, cid):
+                calls.append(cid)
+                return {"subtitles": [
+                    {"lan": "ai-zh", "subtitle_url": "//aisubtitle.hdslb.com/ai.json"},
+                    {"lan": "zh-CN", "subtitle_url": "//aisubtitle.hdslb.com/manual.json"}]}
+
+        sdk = SimpleNamespace(Credential=lambda **kwargs: kwargs, video=SimpleNamespace(Video=Video))
+        download = AsyncMock(return_value=[{"from": 0, "to": 10, "content": "内容"}])
+        with tempfile.TemporaryDirectory() as directory, patch.dict(sys.modules, {"bilibili_api": sdk}), patch("bili_agent.platform.download_subtitles", download):
+            platform = Platform(Path(directory))
+            result = await platform.request("fetch", {"bvid": "BV17x411w7KC", "page": 2})
+            self.assertEqual(result["cid"], "9007199254740993")
+            self.assertEqual(result["page"], 2)
+            self.assertFalse(result["subtitle_generated"])
+            self.assertEqual(calls[1], 9007199254740993)
+            download.assert_awaited_once_with("//aisubtitle.hdslb.com/manual.json")
+
+    async def test_missing_subtitles_stops_without_inventing_content(self):
+        sdk = SimpleNamespace(Credential=lambda **kwargs: kwargs, video=SimpleNamespace(Video=lambda **kwargs: SimpleNamespace(
+            get_info=AsyncMock(return_value={"title": "test", "pages": [{"page": 1, "cid": 1, "duration": 20}]}),
+            get_subtitle=AsyncMock(return_value={"subtitles": []}))))
+        with tempfile.TemporaryDirectory() as directory, patch.dict(sys.modules, {"bilibili_api": sdk}), patch("bili_agent.platform.download_subtitles", AsyncMock()) as download:
+            platform = Platform(Path(directory))
+            with self.assertRaisesRegex(RpcError, "NO_SUBTITLE_OR_LOGIN_REQUIRED"):
+                await platform.request("fetch", {"bvid": "BV17x411w7KC"})
+            download.assert_not_called()
+
+    async def test_search_only_video_candidates_and_strips_markup(self):
+        search = SimpleNamespace(search_by_type=AsyncMock(return_value={"result": [
+            {"bvid": "BV17x411w7KC", "title": '<em>学习</em>&amp;复习', "author": "作者"},
+            {"bvid": "invalid", "title": "bad"}]}), SearchObjectType=SimpleNamespace(VIDEO="video"),
+            OrderVideo=SimpleNamespace(TOTALRANK="totalrank"))
+        with tempfile.TemporaryDirectory() as directory, patch.dict(sys.modules, {"bilibili_api": SimpleNamespace(search=search)}):
+            result = await Platform(Path(directory)).request("search", {"keyword": "学习"})
+            self.assertEqual(len(result["candidates"]), 1)
+            self.assertEqual(result["candidates"][0]["title"], "学习&复习")
+            self.assertEqual(search.search_by_type.call_args.kwargs["search_type"], "video")
+
+    def test_subtitle_cdn_url_boundary(self):
+        self.assertEqual(subtitle_url("//aisubtitle.hdslb.com/a.json"), "https://aisubtitle.hdslb.com/a.json")
+        for url in ["http://aisubtitle.hdslb.com/a", "https://hdslb.com.evil.test/a", "file:///secret", "https://127.0.0.1/a", "https://user:pass@aisubtitle.hdslb.com/a"]:
+            with self.assertRaises(RpcError):
+                subtitle_url(url)
+
+    async def test_private_send_uses_verified_uid_and_disables_sdk_retries(self):
+        settings = SimpleNamespace(get_wbi_retry_times=Mock(return_value=3), set_wbi_retry_times=Mock())
+        credential = SimpleNamespace(dedeuserid='stale')
+        session = SimpleNamespace(send_msg=AsyncMock(return_value={'msg_key': '999'}), EventType=SimpleNamespace(TEXT=1))
+        modules = {'bilibili_api': SimpleNamespace(session=session),
+                   'bilibili_api.utils': SimpleNamespace(),
+                   'bilibili_api.utils.network': SimpleNamespace(request_settings=settings)}
+        with tempfile.TemporaryDirectory() as directory, patch.dict(sys.modules, modules):
+            platform = Platform(Path(directory))
+            platform.credential = lambda: credential
+            result = await platform.request('send_dm', {'account_uid': '77', 'peer_uid': '22', 'text': 'hello'})
+            self.assertEqual(result['msg_key'], '999')
+            self.assertEqual(credential.dedeuserid, '77')
+            self.assertEqual(session.send_msg.call_args.kwargs['receiver_id'], 22)
+            self.assertEqual([call.args[0] for call in settings.set_wbi_retry_times.call_args_list], [1, 3])
+
+    async def test_audio_metadata_selects_requested_part_and_audio_only(self):
+        item = SimpleNamespace(get_download_url=AsyncMock(return_value={'dash': {'audio': [
+            {'id': 1, 'bandwidth': 100000, 'baseUrl': 'https://x.bilivideo.com/high'},
+            {'id': 2, 'bandwidth': 64000, 'baseUrl': 'https://x.bilivideo.com/low'}]}}))
+        with tempfile.TemporaryDirectory() as directory:
+            platform = Platform(Path(directory))
+            platform.video_part = AsyncMock(return_value=(item, {'title': 'test'}, {'cid': 9007199254740993, 'duration': 10}))
+            result = await platform.request('audio', {'bvid': 'BV17x411w7KC', 'page': 2})
+            self.assertEqual(result['cid'], '9007199254740993')
+            self.assertEqual(result['page'], 2)
+            self.assertEqual(result['track_id'], '2')
+            item.get_download_url.assert_awaited_once_with(cid=9007199254740993)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,16 @@
+# Python 3.11+；复制成 config.toml 后填写自己的 BV 号。
+videos = ["BV_REPLACE_ME"]
+keywords = ["小助手"]
+poll_seconds = 60
+pages_per_video = 2
+max_per_poll = 3
+max_per_day = 20
+send_interval_seconds = 30
+max_comment_age_seconds = 3600
+max_reply_chars = 200
+model_timeout_seconds = 120
+database = "data/bot.sqlite3"
+dsh_home = "data/dsh-home"
+dsh_workspace = "data/dsh-workspace"
+model = "deepseek-v4-flash"
+persona = "你是 B 站评论区的 AI 小助手。友好、简洁，通常用一到三句话回答。不要强行玩梗，不编造经历，不假装看过未提供的视频内容。不知道就说明不知道。"

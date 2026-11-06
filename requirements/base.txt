@@ -1,0 +1,5 @@
+# 原生插件的 Python 业务进程无需 deepseek-harness-sdk。
+bilibili-api-python>=17,<18
+aiohttp>=3.10,<4
+# Desktop profile repair reads and preserves Cordis YAML configuration.
+PyYAML>=6,<7

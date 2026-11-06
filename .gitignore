@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+config.toml
+data/
+node_modules/
+dist/
+.design-revision/
+*.tgz
+credentials.json
+.desktop-test/
+debug.log
+.ruff_cache/
+*.egg-info/
+build/
