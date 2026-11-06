@@ -12,7 +12,7 @@ class MemoryTests(unittest.TestCase):
             store = Store(directory)
             try:
                 memory = Memory(store)
-                self.assertIn('身份与性格', memory.profile()['persona'])
+                self.assertIn('可以做什么', memory.profile()['persona'])
                 memory.configure({'name': '阿树', 'style': '温和', 'persona': '喜爱历史，重视来源。',
                                   'preferred_keywords': ['历史'], 'avoided_keywords': ['剧透']})
                 memory.configure({'name': '阿树', 'style': '简短'})
@@ -72,7 +72,7 @@ class MemoryTests(unittest.TestCase):
                 ]:
                     with self.assertRaisesRegex(RpcError, "INVALID_REFLECTION"):
                         memory.validate_reflection(reflection, {0})
-                self.assertEqual(memory.profile()["name"], "小岚")
+                self.assertEqual(memory.profile()["name"], "小黎")
             finally:
                 store.close()
 

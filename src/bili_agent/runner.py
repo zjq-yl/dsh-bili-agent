@@ -2,7 +2,7 @@ import asyncio
 import json
 import time
 
-from .content import SUMMARY_SYSTEM, chunks, parse_summary, summary_json, validate_video
+from .content import SUMMARY_SYSTEM, DEEP_SUMMARY_SYSTEM, chunks, parse_summary, parse_analysis, summary_json, validate_video
 from .protocol import RpcError
 from .memory import Memory, TOPICS
 from .model import RECOVERABLE_MODEL_ERRORS
@@ -192,11 +192,22 @@ class Runner:
         self.wake.set()
         return {"queued": True}
 
+    def reanalyze(self, video_id: int) -> dict:
+        """Rebuild an existing summary from saved subtitles; retain the last result on failure."""
+        with self.store.db:
+            changed = self.store.db.execute("UPDATE videos SET state='queued',checkpoint=0,notes='[]',error=NULL,error_detail=NULL,retry_at=0 WHERE id=? AND state IN ('done','failed')", (video_id,)).rowcount
+            if not changed:
+                raise RpcError(-32602, 'VIDEO_NOT_READY_FOR_REANALYSIS')
+            self.store.db.execute('DELETE FROM video_rollups WHERE video_id=?', (video_id,))
+        self.wake.set()
+        return {'queued': True}
+
     async def summarize(self, purpose: str, payload: dict, allowed: set[int], stage: str,
                         reflect: bool = False) -> dict:
         """Validate grounded output; regenerate once with field-level feedback, within model quotas."""
         system = SUMMARY_SYSTEM
         if reflect:
+            system += DEEP_SUMMARY_SYSTEM
             system += ('\n额外输出reflection对象：{"topic":"给定分类之一","impression":"主观感受",'
                        '"valence":-1到1的数值,"evidence":[字幕整数ID]}。'
                        'topic必须来自topics；impression为1至800字符，建议200以内；'
@@ -209,6 +220,7 @@ class Runner:
                 result = parse_summary(raw, allowed)
                 if reflect:
                     result['reflection'] = self.memory.validate_reflection(summary_json(raw).get('reflection'), allowed)
+                    result['analysis'] = parse_analysis(summary_json(raw).get('analysis'), allowed)
                 return result
             except RpcError as exc:
                 if str(exc) not in ('INVALID_SUMMARY_EVIDENCE', 'INVALID_REFLECTION'):
@@ -261,6 +273,11 @@ class Runner:
             with self.store.db:
                 self.store.db.execute("UPDATE videos SET checkpoint=?,notes=? WHERE id=?",
                                       (index + 1, json.dumps(notes, ensure_ascii=False), row["id"]))
+            if self.store.db.execute("SELECT 1 FROM videos WHERE state='queued' AND priority<? LIMIT 1", (row['priority'],)).fetchone():
+                with self.store.db:
+                    self.store.db.execute("UPDATE videos SET state='queued' WHERE id=?", (row['id'],))
+                self.store.event('analysis', '已保存片段进度，优先处理好友点播', video['bvid'])
+                return
         self.state = "REFLECT"
         self.activity = {'video_id': row['id'], 'bvid': video['bvid'], 'title': video['title'],
                          'message': '正在合并笔记并生成最终总结', 'started': time.time()}
@@ -282,11 +299,15 @@ class Runner:
                        "limitations": (["机器音频转写可能有误", "未分析画面、音色或非语言声音"] if video["source"] == "audio_asr"
                                        else ["基于字幕，未分析音频", "字幕可能缺漏，未分析画面"]),
                        "evidence": [{**part, "url": f'https://www.bilibili.com/video/{video["bvid"]}/?p={video["page"]}&t={int(part["from"])}'}
-                                    for part in video["subtitles"] if part["id"] in ({i for fact in result["facts"] for i in fact["evidence"]} | set(reflection["evidence"]))]})
+                                    for part in video["subtitles"] if part["id"] in ({i for fact in result["facts"] for i in fact["evidence"]} | set(reflection["evidence"]) | set(result['analysis']['evidence']))]})
         with self.store.db:
             self.store.db.execute("UPDATE videos SET state='done',error=NULL,error_detail=NULL,result=? WHERE id=?",
                                   (json.dumps(result, ensure_ascii=False), row["id"]))
             self.memory.record(row["id"], video["bvid"], reflection)
+            self.store.db.execute('UPDATE experiences SET topic=?,impression=?,valence=?,evidence=? WHERE video_id=?',
+                (reflection['topic'], reflection['impression'], reflection['valence'], json.dumps(reflection['evidence']), row['id']))
+            if self.assessment:
+                self.store.db.execute('DELETE FROM video_decisions WHERE video_id=?', (row['id'],))
         if self.on_complete:
             self.on_complete()
         self.store.event('analysis', '视频总结与记忆已保存', video['bvid'])

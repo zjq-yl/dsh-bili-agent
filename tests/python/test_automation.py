@@ -13,6 +13,7 @@ from bili_agent.protocol import RpcError
 from bili_agent.runner import Runner
 from bili_agent.social import Social
 from bili_agent.store import Store
+from bili_agent.library import browse as browse_library, cover_url
 from .test_agent import FakeModel as VideoModel, sample
 from .test_messaging import FakePlatform, message
 
@@ -87,6 +88,115 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
     def friend(self):
         return self.social.save({'peer_uid': '22', 'name': '好友', 'interests': ['Python'], 'auto_send': True,
                                  'preferences': {'push_start': '00:00', 'push_end': '00:00'}})
+
+    async def test_library_queries_all_history_and_filters_ratings_with_safe_video_links(self):
+        for i in range(28):
+            video = {**sample(), 'bvid': 'BV' + f'{i:010}', 'title': f'科技视频 {i}', 'author': '测试UP',
+                     'cover': 'https://i0.hdslb.com/bfs/archive/example.jpg', 'page': 2}
+            key = self.runner.enqueue(video)['id']
+            with self.store.db:
+                self.store.db.execute("UPDATE videos SET state='done',result=? WHERE id=?", (json.dumps({'summary': f'摘要 {i}'}), key))
+                self.store.db.execute('INSERT INTO video_decisions VALUES(?,?,?,?)', (self.dm.account, video['bvid'], key,
+                    json.dumps({'rating': '值得看' if i % 2 else '没必要看', 'reason': '内容判断'})))
+        first = browse_library(self.store.db, self.dm.account)
+        self.assertEqual(first['total'], 28)
+        self.assertEqual(len(first['items']), 12)
+        self.assertEqual(first['counts']['值得看'], 14)
+        last = browse_library(self.store.db, self.dm.account, offset=24)
+        self.assertEqual(len(last['items']), 4)
+        self.assertIn('?p=2', last['items'][0]['url'])
+        self.assertIn('title', last['items'][0])
+        self.assertNotIn('subtitles', last['items'][0])
+        filtered = browse_library(self.store.db, self.dm.account, rating='值得看')
+        self.assertTrue(all(item['assessment']['rating'] == '值得看' for item in filtered['items']))
+        self.assertEqual(browse_library(self.store.db, self.dm.account, query='科技视频 27')['total'], 1)
+        self.assertEqual(browse_library(self.store.db, 'other', rating='unrated')['total'], 28)
+        for bad in ['javascript:alert(1)', 'https://hdslb.com.evil.test/a', 'https://i0.hdslb.com:80/a', 'https://user:secret@i0.hdslb.com/a']:
+            self.assertEqual(cover_url(bad), '')
+
+    async def test_proactive_cap_five_at_send_boundary_does_not_limit_chat_or_requested_videos(self):
+        self.friend()
+        row = await self.video()
+        result = json.loads(row['result'])
+        drafts = []
+        for i in range(6):
+            video = {**result, 'bvid': 'BV' + f'{i:010}'}
+            drafts.append(self.social.recommend('22', row['id'], video, '匹配兴趣。'))
+        with patch('bili_agent.messaging.MIN_SEND_INTERVAL', 0):
+            for draft in drafts[:5]:
+                await self.dm.publish(draft)
+            with self.assertRaisesRegex(RpcError, 'RECOMMENDATION_DAILY_LIMIT'):
+                await self.dm.publish(drafts[5])
+            for i in range(25):
+                chat = self.dm.compose('22', '普通聊天回复', f'chat-test-{i}')
+                await self.dm.publish(chat['id'])
+            requested = self.social.recommend('22', row['id'], result, '这是你点播的内容。', request_id=100)
+            await self.dm.publish(requested)
+        self.assertEqual(len(self.platform.sent), 31)
+        self.assertEqual(self.social.delivery_status('22')['used'], 5)
+        self.assertIsNone(self.dm.delivery_window()['limit'])
+        restarted = Social(self.store, self.dm)
+        self.assertEqual(restarted.delivery_status('22')['reason'], 'RECOMMENDATION_DAILY_LIMIT')
+        with self.assertRaisesRegex(RpcError, 'INVALID_RECOMMENDATION_PREFERENCES'):
+            self.social.save_preferences('22', {'daily_limit': 6})
+
+    async def test_paired_card_keeps_quiet_hours_and_cannot_cross_beijing_midnight(self):
+        self.friend()
+        self.social.save_preferences('22', {'daily_limit': 1})
+        row = await self.video()
+        parent = self.social.recommend('22', row['id'], json.loads(row['result']), '匹配兴趣。', share=True)
+        await self.dm.publish(parent)
+        card = self.store.db.execute('SELECT * FROM dm_outbox WHERE depends_on=?', (parent,)).fetchone()
+        self.social.guard_delivery(card)  # Paired card does not count as a second video.
+        self.social.save_preferences('22', {'push_start': '22:00', 'push_end': '07:00'})
+        noon = datetime.now(BEIJING).replace(hour=12, minute=0)
+        with patch('bili_agent.social.datetime', wraps=datetime) as clock:
+            clock.now.return_value = noon
+            with self.assertRaisesRegex(RpcError, 'RECOMMENDATION_QUIET_HOURS'):
+                self.social.guard_delivery(card)
+            with self.store.db:
+                self.store.db.execute('UPDATE dm_outbox SET attempted=? WHERE id=?',
+                    (noon.replace(hour=0, minute=0, second=0, microsecond=0).timestamp() - 1, parent))
+            with self.assertRaisesRegex(RpcError, 'RECOMMENDATION_CARD_EXPIRED'):
+                self.social.guard_delivery(card)
+
+    async def test_request_uses_history_before_network_and_ignores_proactive_pause_and_clock(self):
+        self.friend()
+        self.social.save_preferences('22', {'daily_limit': 0, 'paused_until': 4102444800})
+        self.auto.configure({'proactive_enabled': False, 'actions_enabled': False, 'share_cards': False,
+                             'scheduled': False, 'start_time': '01:00', 'end_time': '01:01'})
+        video = await self.video()
+        self.dm.ingest('22', [message()])
+        self.auto.request('22', '101', {'keyword': '学习方法', 'count': 1})
+        for _ in range(5):
+            await self.auto.tick()
+        self.assertEqual(self.platform.searches, [])
+        self.assertEqual(self.auto.status()['jobs'][0]['state'], 'complete')
+        self.assertIn(video['bvid'], self.platform.sent[0]['text'])
+        self.assertIn('视频总结', self.platform.sent[0]['text'])
+        self.assertEqual(self.social.delivery_status('22')['used'], 0)
+
+    async def test_insufficient_history_is_reused_then_searches_for_missing_results(self):
+        self.auto.configure({'proactive_enabled': False, 'actions_enabled': False, 'share_cards': False})
+        old = await self.video()
+        self.dm.ingest('22', [message()])
+        key = self.auto.request('22', '101', {'keyword': 'Python', 'count': 2})['id']
+        for _ in range(20):
+            await self.auto.tick()
+            await asyncio.sleep(.005)
+            if self.auto.status()['jobs'][0]['state'] == 'delivering':
+                break
+        self.assertTrue(self.platform.searches)
+        selected = json.loads(self.store.db.execute('SELECT selection FROM browse_jobs WHERE id=?', (key,)).fetchone()[0])
+        self.assertEqual(len(selected), 2)
+        self.assertIn(old['id'], [item['video_id'] for item in selected])
+
+    async def test_fresh_explicit_requests_are_not_rejected_by_old_daily_or_ten_minute_cap(self):
+        for i in range(4):
+            source = str(500+i)
+            self.dm.ingest('22', [message(source)])
+            self.auto.request('22', source, {'keyword': 'DeepSeek', 'count': 1})
+        self.assertEqual(len(self.auto.status()['jobs']), 4)
 
     async def test_request_overrides_are_temporary_and_reuse_saved_analysis(self):
         self.friend()

@@ -15,7 +15,8 @@ test('native bridge drives durable autonomous subtitle queue end-to-end', async 
       const input = JSON.parse(text)
       const evidence = input.subtitles ? [input.subtitles[0].id] : input.notes[0].facts[0].evidence
       return { text: JSON.stringify({ summary: '学习方法', facts: [{ text: '作者建议小目标', evidence }],
-        reflection: { topic: '知识', impression: '我想试试这种方法。', valence: 1, evidence } }), usage: null }
+        reflection: { topic: '知识', impression: '我想试试这种方法。', valence: 1, evidence },
+        analysis: { question: '怎样学习？', conclusion: '设置小目标。', reasoning: '拆分任务便于开始。', caveats: '没有对照实验。', takeaways: '先制定一个目标。', evidence } }), usage: null }
     })
     await bridge.start()
     const video = JSON.parse(await readFile(new URL('../../fixtures/learning-subtitles.json', import.meta.url), 'utf8'))

@@ -2,6 +2,7 @@
 import asyncio
 import json
 import re
+import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -9,8 +10,9 @@ from .messaging import uid
 from .protocol import RpcError
 
 LOCAL_TIME = timezone(timedelta(hours=8))
+MAX_PROACTIVE_VIDEOS = 5
 PREFERENCES = {'mode': 'learning', 'level': '', 'goal': '', 'max_seconds': 0,
-               'daily_limit': 3, 'push_start': '09:00', 'push_end': '22:00',
+               'daily_limit': MAX_PROACTIVE_VIDEOS, 'push_start': '09:00', 'push_end': '22:00',
                'paused_until': 0, 'blocked_keywords': [], 'blocked_authors': []}
 FEEDBACK = {'like': '喜欢', 'too_basic': '太基础', 'too_hard': '太难', 'too_long': '太长',
             'not_interested': '不感兴趣', 'seen': '看过了', 'block_author': '不再推荐这个UP'}
@@ -57,7 +59,9 @@ class Social:
         """Read recipient-owned preferences independently from delivery permissions."""
         row = self.db.execute('SELECT value FROM friend_preferences WHERE account=? AND peer=?',
                               (self.messaging.account, peer)).fetchone()
-        return {**PREFERENCES, **(json.loads(row[0]) if row else {})}
+        prefs = {**PREFERENCES, **(json.loads(row[0]) if row else {})}
+        prefs['daily_limit'] = min(MAX_PROACTIVE_VIDEOS, prefs['daily_limit'])
+        return prefs
 
     def save_preferences(self, peer: str, value: dict) -> dict:
         """Update explicit interests/pace without granting any sending permission."""
@@ -68,7 +72,7 @@ class Social:
         if (prefs['mode'] not in ('learning', 'leisure')
                 or any(not isinstance(prefs[k], str) or len(prefs[k]) > n for k, n in [('level', 100), ('goal', 500)])
                 or type(prefs['max_seconds']) is not int or not 0 <= prefs['max_seconds'] <= 21600
-                or type(prefs['daily_limit']) is not int or not 0 <= prefs['daily_limit'] <= 10
+                or type(prefs['daily_limit']) is not int or not 0 <= prefs['daily_limit'] <= MAX_PROACTIVE_VIDEOS
                 or type(prefs['paused_until']) not in (int, float) or not 0 <= prefs['paused_until'] <= 4102444800):
             raise RpcError(-32602, 'INVALID_RECOMMENDATION_PREFERENCES')
         clock_minutes(prefs['push_start']); clock_minutes(prefs['push_end'])
@@ -206,13 +210,13 @@ class Social:
         reason, next_at = None, now.timestamp()
         if prefs['paused_until'] > next_at:
             reason, next_at = 'RECOMMENDATIONS_PAUSED', prefs['paused_until']
-        elif prefs['daily_limit'] == 0 or used >= prefs['daily_limit']:
-            reason, next_at = 'RECOMMENDATION_DAILY_LIMIT', (midnight + timedelta(days=1)).timestamp()
         elif not within:
             slot = midnight + timedelta(minutes=start)
             if slot <= now:
                 slot += timedelta(days=1)
             reason, next_at = 'RECOMMENDATION_QUIET_HOURS', slot.timestamp()
+        elif prefs['daily_limit'] == 0 or used >= prefs['daily_limit']:
+            reason, next_at = 'RECOMMENDATION_DAILY_LIMIT', (midnight + timedelta(days=1)).timestamp()
         return {'used': used, 'limit': prefs['daily_limit'], 'reason': reason, 'next_at': next_at}
 
     def profile(self, peer):
@@ -223,6 +227,24 @@ class Social:
         return {**dict(row), 'interests': json.loads(row['interests']),
                 'recommend': bool(row['recommend']), 'auto_send': bool(row['auto_send']),
                 'preferences': self.preferences(peer), 'delivery': self.delivery_status(peer)}
+
+    def guard_delivery(self, draft: sqlite3.Row) -> None:
+        """Enforce the proactive cap inside Messaging's send lock, including manual sends."""
+        recommendation = self.db.execute('SELECT 1 FROM recommendations WHERE account=? AND draft_id=?',
+            (self.messaging.account, draft['depends_on'] or draft['id'])).fetchone()
+        if not recommendation:
+            return  # Ordinary conversation and explicit recommendations have no daily cap.
+        delivery = self.delivery_status(draft['peer'])
+        if draft['depends_on']:
+            # A paired card is the same recommendation, not a sixth video. Do not carry it into another day.
+            parent = self.db.execute('SELECT attempted FROM dm_outbox WHERE id=?', (draft['depends_on'],)).fetchone()
+            midnight = datetime.now(LOCAL_TIME).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+            if not parent or not parent['attempted'] or parent['attempted'] < midnight:
+                raise RpcError(-32040, 'RECOMMENDATION_CARD_EXPIRED')
+            if delivery['reason'] == 'RECOMMENDATION_DAILY_LIMIT' and delivery['limit'] > 0:
+                return
+        if delivery['reason']:
+            raise RpcError(-32040, delivery['reason'])
 
     def status(self):
         account = self.messaging.account
@@ -245,7 +267,20 @@ class Social:
         if point:
             seconds = max(0, int(point['from']))
             evidence = f"\n内容依据 {seconds // 60}:{seconds % 60:02d}：{point['content'][:50]}\nhttps://www.bilibili.com/video/{result['bvid']}/?p={result.get('page', 1)}&t={seconds}"
-        body = f"推荐给你：{result['title'][:60]}\n为什么适合你：{reason[:160]}\n\n内容摘记：{result['summary'][:200]}\n\nhttps://www.bilibili.com/video/{result['bvid']}/{evidence}\n可回复反馈：太基础、太难、太长、不感兴趣（多条推荐请附BV号）。"
+        analysis = result.get('analysis') or {}
+        prefix = f"推荐给你：{result['title'][:60]}\n为什么适合你：{reason[:160]}\n\n视频总结："
+        suffix = f"\n\nhttps://www.bilibili.com/video/{result['bvid']}/?p={result.get('page', 1)}{evidence}\n可回复反馈：太基础、太难、太长、不感兴趣（多条推荐请附BV号）。"
+        available = 800 - len(prefix) - len(suffix)
+        excerpt = result['summary']
+        if analysis:
+            sections = []
+            for label, field, fraction in [('结论', 'conclusion', .4), ('依据', 'reasoning', .35), ('局限', 'caveats', .25)]:
+                budget = max(1, int((available - 11) * fraction))
+                value = analysis[field]
+                sections.append(f"{label}：" + (value if len(value) <= budget else value[:budget-1] + '…'))
+            excerpt = '\n'.join(sections)
+        excerpt = excerpt if len(excerpt) <= available else excerpt[:available-1] + '…'
+        body = prefix + excerpt + suffix
         if request_id is not None:
             draft_id = self.messaging.compose(peer, body, f"req-{request_id}-{video_id}-{peer}")['id']
             if share:
@@ -333,6 +368,8 @@ class Social:
         if not self.model_driven:
             self.discover()
         if not self.messaging.send_enabled or not self.proactive_enabled:
+            return
+        if self.messaging.priority_pending():
             return
         pending = self.db.execute("""SELECT o.id,o.peer,r.bvid FROM recommendations r
             JOIN dm_outbox o ON o.id=r.draft_id JOIN friends f ON f.account=r.account AND f.peer=r.peer

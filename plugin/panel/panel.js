@@ -7,13 +7,13 @@ if (/^[a-f0-9]{64}$/.test(fragment)) {
 }
 const token = sessionStorage.getItem('bili-panel-token') || ''
 const pages = {
-  overview: ['运行总览', '今天，也发现一点新东西。', '让好奇心有自己的节奏，把好内容留给合适的人。'],
-  automation: ['自动刷视频', '探索，也可以有自己的节奏。', '设置时间、轮次和行动边界，让机器人按计划运行。'],
-  videos: ['视频资料', '看过的内容，留下自己的判断。', '值得看、可以看、没必要看。每一次判断都有依据。'],
-  messages: ['私信会话', '认真回应每一次交流。', '查看回复草稿、发送结果，以及视频推荐卡片。'],
-  'friends-section': ['好友与推荐', '把好内容，分享给对的人。', '了解每位好友的兴趣，只推荐真正值得看的内容。'],
-  persona: ['我的人设', '有自己的喜好，也有清晰的边界。', '设置性格、表达方式和选片偏好，保持角色的连续性。'],
-  actions: ['操作记录', '每个选择，都有理由。', '查看点赞、收藏和不喜欢的实际执行结果。'],
+  overview: ['概览', '运行概览', '账号状态、今日计划与处理进度。'],
+  automation: ['定时浏览', '定时浏览', '设置每日时段、浏览数量和互动方式。'],
+  videos: ['视频库', '视频库', '添加视频，查看总结与评价。'],
+  messages: ['私信', '私信', '监听消息、查看回复与发送结果。'],
+  'friends-section': ['好友', '好友与推荐', '管理兴趣档案和推送偏好。'],
+  persona: ['人设与记忆', '人设与记忆', '编辑性格、内容偏好和表达边界。'],
+  actions: ['操作记录', '操作记录', '查看点赞、收藏和不喜欢的执行结果。'],
 }
 function navigate(view) {
   if (!pages[view]) view = 'overview'
@@ -26,6 +26,7 @@ function navigate(view) {
   ;[$('page-label').textContent, $('page-title').textContent, $('page-description').textContent] = pages[view]
   history.replaceState(null, '', `${location.pathname}#${view}`)
   window.scrollTo({ top: 0 })
+  if (view === 'videos') void loadLibrary()
 }
 for (const link of document.querySelectorAll('nav a, .inline-route')) link.addEventListener('click', event => { event.preventDefault(); navigate(link.getAttribute('href').slice(1)) })
 let current = null
@@ -35,7 +36,7 @@ let accountName = ''
 let automationLoaded = false
 let liveConnected = false
 const names = { PAUSED: '已暂停', IDLE: '等待任务', ANALYZE: '分析中', REFLECT: '正在汇总', DISCOVER: '正在找视频', BLOCKED: '需要处理', STOPPED: '已停止', RUNNING: '监听中', queued: '排队中', analyzing: '分析中', reflecting: '正在汇总', done: '已完成', failed: '失败', draft: '草稿', sent: '已发送', uncertain: '待确认', sending: '发送中', cancelled: '已取消' }
-const errors = { PANEL_AUTH_REQUIRED: '面板访问凭据失效，请重新运行打开面板脚本。', NETWORK_ACCESS_DENIED: '当前运行环境拒绝网络访问。', MODEL_NOT_CONFIGURED: '请先在 DSH 配置默认模型。', HOST_CALL_FAILED: '模型调用失败，请查看 DSH 模型连接状态。', INVALID_SUMMARY_EVIDENCE: '总结格式或证据校验失败，可以重试任务。', NO_SUBTITLE_OR_LOGIN_REQUIRED: '此视频没有可用字幕，或需要重新登录。', DM_SEND_DISABLED: '私信发送尚未开启，请在 DSH 插件设置中启用。', CONFIGURE_DM_SEND_SCOPE_FIRST: '请先启用私信发送并填写允许回复的账号 UID。', STOP_DM_BEFORE_CHANGING_MODE: '请先停止监听，再选择另一种回复模式。', VERIFY_ACCOUNT_FIRST: '请先点击“验证 B 站账号”。', DM_SEND_LIMIT: '已达到发送间隔或每日额度，请稍后再试。', DATA_DIR_IN_USE: '数据目录已被另一个 worker 占用。', LOGIN_REQUIRED: '登录已失效，请更新本地账号凭据。', PLATFORM_CHALLENGE: 'B 站要求账号验证，请先在 B 站处理。', PAUSE_BEFORE_CHANGING_TOPIC: '请先暂停分析，再切换主题。', VIDEO_NOT_FAILED: '该任务当前不是失败状态，请刷新查看。', MODEL_DAILY_LIMIT: '旧版本的本地次数限制，新版已取消，请重新加载插件。' }
+const errors = { PANEL_AUTH_REQUIRED: '面板访问凭据失效，请重新运行打开面板脚本。', NETWORK_ACCESS_DENIED: '当前运行环境拒绝网络访问。', MODEL_NOT_CONFIGURED: '请先在 DSH 配置默认模型。', HOST_CALL_FAILED: '模型调用失败，请查看 DSH 模型连接状态。', INVALID_SUMMARY_EVIDENCE: '总结格式或证据校验失败，可以重试任务。', NO_SUBTITLE_OR_LOGIN_REQUIRED: '此视频没有可用字幕，或需要重新登录。', DM_SEND_DISABLED: '私信发送尚未开启，请在 DSH 插件设置中启用。', CONFIGURE_DM_SEND_SCOPE_FIRST: '请先启用私信发送并填写允许回复的账号 UID。', STOP_DM_BEFORE_CHANGING_MODE: '请先停止监听，再选择另一种回复模式。', VERIFY_ACCOUNT_FIRST: '请先点击“验证 B 站账号”。', DM_SEND_LIMIT: '发送间隔未到，请稍后再试；聊天不设每日上限。', DATA_DIR_IN_USE: '数据目录已被另一个 worker 占用。', LOGIN_REQUIRED: '登录已失效，请更新本地账号凭据。', PLATFORM_CHALLENGE: 'B 站要求账号验证，请先在 B 站处理。', PAUSE_BEFORE_CHANGING_TOPIC: '请先暂停分析，再切换主题。', VIDEO_NOT_FAILED: '该任务当前不是失败状态，请刷新查看。', MODEL_DAILY_LIMIT: '旧版本的本地次数限制，新版已取消，请重新加载插件。' }
 function explain(code) { return errors[code] || code || '操作失败，请刷新后重试。' }
 Object.assign(errors, { RECOMMENDATIONS_PAUSED: '主动推荐已暂停', RECOMMENDATION_DAILY_LIMIT: '已达到该好友今日主动推荐上限', RECOMMENDATION_QUIET_HOURS: '当前不在允许推送时段', INVALID_PUSH_TIME: '请输入有效的推送时间', INVALID_RECOMMENDATION_PREFERENCES: '请检查推荐偏好、数量和时长范围', RECOMMENDATION_NOT_DELIVERED: '未找到这条视频向该对象成功发送的记录', VIDEO_NOT_ANALYZED: '这条视频还没有完成分析', VIDEO_AUTHOR_UNKNOWN: '缺少已核实的UP主信息，可在档案中手动填写屏蔽UID', VIDEO_EXCLUDED_BY_PREFERENCES: '按接收者偏好跳过该视频' })
 Object.assign(errors, { INVALID_AUTOMATION_CONFIG: '自动运行设置超出允许范围。', AUTOMATION_WINDOW_MUST_BE_SAME_DAY: '结束时间需晚于开始时间，目前支持同一天的时段。', INVALID_VIDEO_DECISION: '视频评价格式不合规，未执行动作。', DISLIKE_REQUIRES_APP_TOKEN: '缺少 App 凭据：仅在本地记为不喜欢。', FAVORITE_FOLDER_REQUIRED: '没有找到默认收藏夹，请在自动运行页选择收藏夹。', CARD_REASON_NOT_SENT: '请先发送该卡片对应的推荐理由。', RECOMMENDATION_REQUEST_LIMIT: '推荐检索请求已达到频率限制。' })
@@ -101,6 +102,7 @@ function renderStatus(data) {
     $('updated').textContent = `更新于 ${new Date().toLocaleTimeString()} · ${liveConnected ? '实时连接 · 每秒同步' : '正在连接实时推送'}`
     $('version').textContent = `v${current.version}`
     updateAutoButton()
+    if (!$('videos').hidden && !libraryLoading && Date.now() - libraryUpdated > 5000) void loadLibrary()
 }
 async function liveUpdates() {
   for (;;) {
@@ -129,6 +131,60 @@ async function liveUpdates() {
     await new Promise(resolve => setTimeout(resolve, 2000))
   }
 }
+let libraryOffset = 0, libraryQuery = '', libraryLoading = 0, libraryRequest = 0, libraryUpdated = 0
+let libraryVersion = ''
+function videoLink(bvid, page = 1, label = '在 B 站观看') {
+  const link = text('a', label)
+  if (/^BV[0-9A-Za-z]{10}$/.test(bvid)) link.href = `https://www.bilibili.com/video/${bvid}/?p=${Number(page) || 1}`
+  link.target = '_blank'; link.rel = 'noopener noreferrer'; return link
+}
+async function loadLibrary() {
+  const request = ++libraryRequest
+  libraryLoading++; libraryUpdated = Date.now()
+  try {
+    const data = await call('library.list', { query: libraryQuery, rating: $('rating-filter').value, offset: libraryOffset, limit: 12 })
+    if (request !== libraryRequest) return
+    if (libraryOffset && libraryOffset >= data.total) { libraryOffset = Math.max(0, Math.floor((data.total - 1) / 12) * 12); void loadLibrary(); return }
+    $('library-total').textContent = `共 ${data.counts.all} 个 · 值得看 ${data.counts['值得看']} · 可以看 ${data.counts['可以看']} · 没必要看 ${data.counts['没必要看']} · 待评价 ${data.counts.unrated}`
+    $('library-page').textContent = data.total ? `第 ${libraryOffset / 12 + 1} / ${Math.ceil(data.total / 12)} 页 · 当前分类 ${data.total} 个` : '暂无匹配视频'
+    $('library-prev').disabled = libraryOffset === 0; $('library-next').disabled = libraryOffset + 12 >= data.total
+    const version = JSON.stringify(data)
+    if (version === libraryVersion) return
+    libraryVersion = version
+    $('video-assessments').replaceChildren(...data.items.map(item => {
+      const card = document.createElement('article'); card.className = 'video-card'
+      const cover = videoLink(item.bvid, item.page, ''); cover.className = 'video-cover'; cover.setAttribute('aria-label', `在 B 站观看：${item.title}`)
+      cover.append(text('span', '▶', 'cover-play'), text('small', item.cover ? '在 B 站观看' : '暂无封面 · 在 B 站观看', 'cover-fallback'))
+      if (item.cover) {
+        const url = new URL(item.cover)
+        if (url.protocol === 'https:' && url.hostname.endsWith('.hdslb.com') && !url.username && !url.password && (!url.port || url.port === '443')) {
+          const img = document.createElement('img'); img.src = url.href; img.alt = ''; img.loading = 'lazy'; img.referrerPolicy = 'no-referrer'; img.onerror = () => img.remove(); cover.append(img)
+        }
+      }
+      const seconds = Math.max(0, Math.floor(item.duration || 0))
+      cover.append(text('span', `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`, 'video-duration'))
+      const content = document.createElement('div'); content.className = 'video-card-content'
+      content.append(item.assessment?.rating ? ratingBadge(item.assessment.rating) : badge(item.state === 'done' ? '等待评价' : item.state))
+      const heading = document.createElement('h3'); heading.append(videoLink(item.bvid, item.page, item.title || item.bvid)); content.append(heading)
+      content.append(text('p', `${item.author || 'UP 主未记录'} · P${item.page || 1}`, 'subtle'))
+      if (item.assessment?.reason) content.append(text('p', item.assessment.reason, 'video-reason'))
+      content.append(text('p', item.summary || (item.error ? explain(item.error) : '分析完成后显示总结。'), 'video-excerpt'))
+      const actions = document.createElement('div'); actions.className = 'video-card-actions'
+      const summary = button('查看总结', () => showResult(item.id)); summary.disabled = !item.summary; actions.append(summary)
+      if (!item.cover) actions.append(button('补全封面', async () => {
+        const result = await call('library.refresh', { video_id: item.id }); await loadLibrary()
+        notice(result.has_cover ? '视频封面与信息已更新。' : '信息已更新，平台未提供可用封面。')
+      }))
+      if (['done', 'failed'].includes(item.state)) actions.append(button('重新深度总结', async () => {
+        await call('agent.reanalyze', { video_id: item.id }); await call('agent.start')
+        notice('已用保存的字幕重新分析，将调用模型；完成前保留上次总结。'); await loadLibrary()
+      }))
+      content.append(actions); card.append(cover, content); return card
+    }))
+    if (!data.items.length) $('video-assessments').append(text('p', '没有匹配的视频。可调整分类和关键词，或展开下方入口添加视频。', 'empty'))
+  } catch (error) { if (request === libraryRequest) notice(error.message, true) }
+  finally { libraryLoading-- }
+}
 function renderTasks(queue) {
   const rows = queue.map(item => {
     const row = document.createElement('tr')
@@ -143,7 +199,7 @@ function renderTasks(queue) {
     row.append(actions); return row
   })
   $('tasks').replaceChildren(...rows)
-  if (!rows.length) { const row = document.createElement('tr'); const cell = text('td', '还没有视频任务，先添加一个视频吧。', 'empty'); cell.colSpan = 4; row.append(cell); $('tasks').append(row) }
+  if (!rows.length) { const row = document.createElement('tr'); const cell = text('td', '暂无视频。添加链接后开始分析。', 'empty'); cell.colSpan = 4; row.append(cell); $('tasks').append(row) }
 }
 function renderOutbox(outbox, dm) {
   $('outbox').replaceChildren(...outbox.map(item => {
@@ -154,7 +210,7 @@ function renderOutbox(outbox, dm) {
     const bvid = item.text?.match(/BV[0-9A-Za-z]{10}/)?.[0]
     if (item.state === 'sent' && bvid) card.append(button('反馈这条推荐', async () => {
       $('feedback-peer').value = item.peer; $('feedback-bvid').value = bvid
-      navigate('friends-section'); $('feedback-form').scrollIntoView({ block: 'center' })
+      navigate('friends-section'); $('feedback-editor').open = true; $('feedback-form').scrollIntoView({ block: 'center' })
     }))
     if (item.state === 'draft') {
       const send = button('发送这条草稿', async () => { const result = await call('dm.send', { draft_id: item.id }); notice(result.state === 'sent' ? '私信已发送。' : `发送状态：${names[result.state] || result.state}`, result.state !== 'sent') })
@@ -179,7 +235,7 @@ function renderDmProgress(dm) {
   $('dm-current-step').textContent = currentStep?.message || (dm.state === 'BLOCKED' ? '等待处理错误' : dm.state === 'RUNNING' ? '等待下一轮' : '已停止')
   $('dm-step-detail').textContent = currentStep ? `已等待 ${Math.max(0, Math.floor(now - currentStep.started))} 秒${active.length > 1 ? ` · 共 ${active.length} 项处理中` : ''}` : (dm.error ? explain(dm.error) : '')
   $('dm-send-window').textContent = !dm.send_enabled ? '发送开关未开启' : window?.reason ? `${remaining(window.next_at)}后可尝试` : '当前可尝试发送'
-  $('dm-send-usage').textContent = window ? `今日发送尝试 ${window.used} / ${window.limit}${window.reason ? ` · 最早 ${stamp(window.next_at)}` : ''}` : ''
+  $('dm-send-usage').textContent = window ? `今日发送 ${window.used} 次 · 聊天不设每日上限${window.reason ? ` · 最早 ${stamp(window.next_at)}` : ''}` : ''
   $('dm-reply-expectation').textContent = dm.state === 'BLOCKED'
     ? `当前不会自动回复：${explain(dm.error)}。处理原因后点击“开启自动回复”。`
     : dm.state !== 'RUNNING' ? '监听未启动。启动后才会处理新收到的消息。'
@@ -227,7 +283,7 @@ function renderFriends(social) {
     card.append(text('p', friend.recommend ? (friend.auto_send ? '匹配后自动发送推荐' : '匹配后生成推荐草稿') : '已关闭视频推荐', 'subtle'))
     const prefs = friend.preferences || {}
     card.append(text('p', `${prefs.mode === 'leisure' ? '休闲' : '学习'}模式 · ${prefs.level || '水平未设置'} · ${prefs.goal || '目标未设置'}`, 'subtle'))
-    card.append(text('p', `今日主动推荐 ${friend.delivery?.used || 0} / ${prefs.daily_limit ?? 3} · 推送时段 ${prefs.push_start || '09:00'}—${prefs.push_end || '22:00'}${friend.delivery?.reason ? ` · ${explain(friend.delivery.reason)}` : ''}`, 'subtle'))
+    card.append(text('p', `今日主动推荐 ${friend.delivery?.used || 0} / ${prefs.daily_limit ?? 5} 个视频 · 推送时段 ${prefs.push_start || '09:00'}—${prefs.push_end || '22:00'}${friend.delivery?.reason ? ` · ${explain(friend.delivery.reason)}` : ''}`, 'subtle'))
     card.append(button('今天先别发', async () => {
       await call('friends.preferences', { peer_uid: friend.peer, pause_today: true })
       notice('已暂停今天的主动推荐，点播请求仍会处理。')
@@ -235,6 +291,7 @@ function renderFriends(social) {
       await call('friends.preferences', { peer_uid: friend.peer, preferences: { paused_until: 0 } }); notice('已取消暂停，仍按该好友的推送时间和权限发送。')
     }))
     card.append(button('编辑档案', async () => {
+      $('friend-editor').open = true
       $('friend-uid').value = friend.peer; $('friend-name').value = friend.name; $('friend-category').value = friend.category
       $('friend-interests').value = friend.interests.join('，'); $('friend-style').value = friend.style
       $('friend-recommend').checked = friend.recommend; $('friend-auto').checked = friend.auto_send; $('friend-uid').focus()
@@ -249,7 +306,7 @@ function renderFriends(social) {
 
 const preferenceFields = { mode: 'friend-mode', level: 'friend-level', goal: 'friend-goal', max_seconds: 'friend-max-seconds', daily_limit: 'friend-daily-limit', push_start: 'friend-push-start', push_end: 'friend-push-end', blocked_keywords: 'friend-blocked-keywords', blocked_authors: 'friend-blocked-authors' }
 function fillPreferences(prefs = {}) {
-  const defaults = { mode: 'learning', level: '', goal: '', max_seconds: 0, daily_limit: 3, push_start: '09:00', push_end: '22:00', blocked_keywords: [], blocked_authors: [] }
+  const defaults = { mode: 'learning', level: '', goal: '', max_seconds: 0, daily_limit: 5, push_start: '09:00', push_end: '22:00', blocked_keywords: [], blocked_authors: [] }
   for (const [key, id] of Object.entries(preferenceFields)) { const value = prefs[key] ?? defaults[key]; $(id).value = Array.isArray(value) ? value.join('，') : value }
 }
 function readPreferences() {
@@ -261,9 +318,28 @@ async function showResult(id) {
   const result = data.result
   $('result-title').textContent = result.title || '视频总结'
   const body = $('result-body'); body.replaceChildren(text('p', result.summary))
+  body.prepend(videoLink(result.bvid, result.page, '▶ 在 B 站观看完整视频'))
+  if (data.state !== 'done') body.prepend(text('p', '新版分析尚未完成，以下为上次保存的总结。', 'hint'))
   if (data.assessment) body.prepend(ratingBadge(data.assessment.rating), text('p', data.assessment.reason))
   body.append(text('h3', '内容要点')); const list = document.createElement('ul')
-  for (const fact of result.facts || []) list.append(text('li', fact.text)); body.append(list)
+  for (const fact of result.facts || []) {
+    const entry = text('li', fact.text)
+    for (const id of (fact.evidence || []).slice(0, 3)) {
+      const evidence = (result.evidence || []).find(point => point.id === id)
+      if (evidence) {
+        const seconds = Math.max(0, Math.floor(evidence.from))
+        const link = videoLink(result.bvid, result.page, ` ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`)
+        link.href += `&t=${seconds}`; entry.append(link)
+      }
+    }
+    list.append(entry)
+  }
+  body.append(list)
+  if (result.analysis) {
+    for (const [key, heading] of [['question', '核心问题'], ['conclusion', '核心结论'], ['reasoning', '论证过程'], ['caveats', '局限与未证实之处'], ['takeaways', '适合谁与实际收获']]) {
+      body.append(text('h3', heading), text('p', result.analysis[key]))
+    }
+  } else body.append(text('p', '这是旧版摘要，可在视频卡片点击“重新深度总结”补充分析。', 'hint'))
   if (result.reflection) body.append(text('h3', '我的感受'), text('p', result.reflection.impression))
   body.append(text('h3', '回到原视频'))
   const bvid = result.bvid
@@ -336,23 +412,15 @@ function renderAutomation(auto) {
     automationLoaded = true
   }
   $('daily-window').textContent = `${auto.config.start_time} — ${auto.config.end_time}`
-  $('daily-detail').textContent = auto.config.scheduled ? `${auto.config.rounds} 轮探索 · 每轮目标 ${auto.config.per_round} 个视频` : '定时探索已关闭'
+  $('daily-detail').textContent = auto.config.scheduled ? `${auto.config.rounds} 轮 · 每轮最多 ${auto.config.per_round} 个视频` : '定时浏览已关闭'
   $('daily-slots').replaceChildren(...auto.slots.map(slot => text('span', slot, 'slot')))
   $('automation-health').textContent = auto.error ? `自动任务：${explain(auto.error)}` : '运行设置已同步。DSH 完全退出时，自动任务也会停止。'
   const reviews = auto.assessments || []
   for (const [id, rating] of [['count-worth', '值得看'], ['count-okay', '可以看'], ['count-skip', '没必要看']]) $(id).textContent = reviews.filter(item => item.assessment.rating === rating).length
-  const visible = reviews.filter(item => !$('rating-filter').value || item.assessment.rating === $('rating-filter').value)
-  $('video-assessments').replaceChildren(...visible.map(item => {
-    const card = document.createElement('article'); card.className = 'review-card'
-    card.append(ratingBadge(item.assessment.rating), text('h3', item.title), text('p', item.assessment.reason),
-      button('阅读总结与证据', () => showResult(item.video_id)))
-    return card
-  }))
-  if (!visible.length) $('video-assessments').append(text('p', '这里会保存分析后的评价。不会仅凭标题判断视频好坏。', 'empty'))
   const states = { queued: '等待探索', browsing: '正在选片与分析', waiting: '等待分析与评价', delivering: '结果已生成 · 等待发送', complete: '处理完成', expired: '时段已过', failed: '需要处理' }
   $('browse-jobs').replaceChildren(...auto.jobs.map(job => {
     const card = document.createElement('article'); card.className = 'job-card'
-    const top = document.createElement('div'); top.className = 'draft-top'; top.append(text('strong', job.kind === 'request' ? `好友请求 · UID ${job.peer}` : '定时探索'), badge(states[job.state] || job.state))
+    const top = document.createElement('div'); top.className = 'draft-top'; top.append(text('strong', job.kind === 'request' ? `好友请求 · UID ${job.peer}` : '定时浏览'), badge(states[job.state] || job.state))
     const analyzed = job.videos.filter(video => video.state === 'done').length
     card.append(top, text('h3', job.keyword), text('p', `${job.round_index} / ${job.rounds} 轮 · 已分析 ${analyzed} 个 · 跳过 ${job.videos.filter(video => video.error).length} 个`, 'subtle'))
     if (job.blocked_reason || job.error) card.append(text('p', explain(job.blocked_reason || job.error), 'error'))
@@ -370,7 +438,7 @@ function renderAutomation(auto) {
         $('friend-interests').value = job.keyword; $('friend-recommend').checked = true
         fillPreferences(job.requirements || {})
         $('friend-auto').checked = !!current?.messaging?.send_enabled && current.messaging.allowed_peers.includes(job.peer)
-        navigate('friends-section'); notice('已填入请求对象和兴趣，确认后点击“保存好友”启用后续主动推荐。')
+        navigate('friends-section'); $('friend-editor').open = true; $('friend-uid').focus(); notice('已填入请求对象和兴趣，确认后点击“保存好友”启用后续主动推荐。')
       }))
     }
     return card
@@ -385,9 +453,12 @@ function renderAutomation(auto) {
     card.append(top, text('p', item.reason)); if (item.error) card.append(text('small', explain(item.error), 'subtle'))
     return card
   }))
-  if (!auto.actions.length) $('action-list').append(text('p', '还没有操作记录。模型可以选择不操作。', 'empty'))
+  if (!auto.actions.length) $('action-list').append(text('p', '暂无互动记录。', 'empty'))
 }
-$('rating-filter').onchange = () => renderAutomation(current?.automation)
+$('rating-filter').onchange = () => { libraryOffset = 0; void loadLibrary() }
+form('library-search', async () => { libraryQuery = $('library-query').value.trim(); libraryOffset = 0; await loadLibrary() })
+$('library-prev').onclick = () => { libraryOffset = Math.max(0, libraryOffset - 12); void loadLibrary() }
+$('library-next').onclick = () => { libraryOffset += 12; void loadLibrary() }
 form('automation-form', async () => {
   const config = {}
   for (const [key, id] of Object.entries(autoFields)) config[key] = $(id).type === 'checkbox' ? $(id).checked : $(id).type === 'number' ? Number($(id).value) : $(id).value.trim()
@@ -400,7 +471,7 @@ bind('load-folders', async () => {
 })
 navigate(pages[fragment] ? fragment : 'overview')
 
-Object.assign(errors, { DM_SEND_INTERVAL: '等待私信发送冷却', DM_DAILY_LIMIT: '今日私信发送额度已用完', VIDEO_PAUSED: '视频处理已暂停，点击开始 / 继续分析恢复', RECIPIENT_NOT_ENABLED: '接收者不在允许发送范围', DM_SEND_UNCERTAIN: '发送结果待确认，请到 B 站核对；不会自动重复发送', VIDEO_EXCEEDS_AUTOMATION_DURATION: '超过自动选片时长上限', NO_SUBTITLE_URL: '没有可用字幕地址', INVALID_RECOMMENDATION_SELECTION: '推荐选择输出不合规，任务保留等待处理' })
+Object.assign(errors, { VIDEO_NOT_READY_FOR_REANALYSIS: '视频正在处理中，请完成或暂停后再查看状态', VIDEO_PART_CHANGED: '分P信息已变化，请重新添加正确的视频链接', RECOMMENDATION_CARD_EXPIRED: '附加卡片已跨天，未继续发送', DM_SEND_INTERVAL: '等待私信发送冷却', DM_DAILY_LIMIT: '旧版本的聊天日上限已取消，请重载插件', VIDEO_PAUSED: '视频处理已暂停，点击开始 / 继续分析恢复', RECIPIENT_NOT_ENABLED: '接收者不在允许发送范围', DM_SEND_UNCERTAIN: '发送结果待确认，请到 B 站核对；不会自动重复发送', VIDEO_EXCEEDS_AUTOMATION_DURATION: '超过自动选片时长上限', NO_SUBTITLE_URL: '没有可用字幕地址', INVALID_RECOMMENDATION_SELECTION: '推荐选择输出不合规，任务保留等待处理' })
 function renderLive(data) {
   const auto = data.automation, dm = data.messaging
   const active = [data.agent?.activity, auto?.activity].filter(Boolean)
@@ -412,9 +483,9 @@ function renderLive(data) {
       text('small', `当前步骤已等待 ${Math.max(0, Math.floor(Date.now() / 1000 - item.started))} 秒`, 'subtle'))
     return card
   }))
-  if (!active.length) $('live-activity').append(text('p', data.agent?.error ? `分析等待处理：${explain(data.agent.error)}` : '当前没有正在执行的分析步骤；下方可查看任务、发送队列和日志。', 'subtle'))
+  if (!active.length) $('live-activity').append(text('p', data.agent?.error ? `分析等待处理：${explain(data.agent.error)}` : '暂无进行中的任务。', 'subtle'))
   const window = dm.delivery_window
-  $('send-progress').textContent = window ? `今日发送尝试 ${window.used} / ${window.limit} · ${window.reason ? `${explain(window.reason)}，最早 ${new Date(window.next_at * 1000).toLocaleString()} 可再尝试（约 ${Math.max(0, Math.ceil(window.next_at - Date.now() / 1000))} 秒）` : '当前发送额度可用'}。实际送达以平台回执为准。` : ''
+  $('send-progress').textContent = window ? `今日发送 ${window.used} 次 · 聊天不设每日上限。${window.reason ? `${explain(window.reason)}，最早 ${new Date(window.next_at * 1000).toLocaleTimeString()} 可再次发送。` : '当前可发送。'}主动推荐每位好友每天最多 5 个视频，点播单独处理。` : ''
   const budget = auto?.model_budget
   $('model-progress').textContent = budget ? `今日模型已调用 ${budget.used} 次 · 不设本地次数上限。${auto.delivery_error ? `发送等待：${explain(auto.delivery_error)}` : ''}` : ''
   const friends = data.social?.friends || []
@@ -434,7 +505,7 @@ function renderLive(data) {
         text('p', `${event.message}${event.error ? `：${explain(event.error)}` : ''}`))
       return row
     }))
-    if (!events.length) log.append(text('p', '更新版本后的运行事件会显示在这里；历史日志不会凭空补造。', 'subtle'))
+    if (!events.length) log.append(text('p', '暂无运行记录。', 'subtle'))
   }
   $('live-requests').replaceChildren(...(auto?.jobs || []).filter(job => job.kind === 'request').map(job => {
     const card = document.createElement('article'); card.className = 'activity-item'

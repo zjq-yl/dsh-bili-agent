@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock
 
-from bili_agent.content import validate_video, parse_summary
+from bili_agent.content import validate_video, parse_summary, parse_analysis
 from bili_agent.protocol import RpcError
 from bili_agent.runner import Runner
 from bili_agent.store import Store
@@ -32,7 +32,9 @@ class FakeModel:
         ids = [part["id"] for part in value["subtitles"]] if "subtitles" in value else value.get('allowed_evidence_ids', [0])[:1]
         return json.dumps({"summary": "作者分享学习方法。", "facts": [
             {"text": "作者建议设定小目标。", "evidence": [99999] if self.invalid else ids}],
-            "reflection": {"topic": "知识", "impression": "我想试试这种学习方法。", "valence": 1, "evidence": ids}})
+            "reflection": {"topic": "知识", "impression": "我想试试这种学习方法。", "valence": 1, "evidence": ids},
+            "analysis": {"question": "怎样学习？", "conclusion": "从小目标开始。", "reasoning": "作者通过目标和回忆连接学习步骤。",
+                         "caveats": "未提供对照实验。", "takeaways": "可先设定一个小目标。", "evidence": ids}})
 
 
 class AgentTests(unittest.IsolatedAsyncioTestCase):
@@ -70,6 +72,33 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["evidence"][0]["id"], 0)
         await self.runner.pause("STOPPED")
         self.assertEqual(self.runner.status()["state"], "STOPPED")
+
+    async def test_deep_summary_requires_valid_evidence_and_reanalysis_keeps_last_result_until_success(self):
+        key = self.runner.enqueue(sample())['id']
+        await self.runner.analyze(self.store.db.execute('SELECT * FROM videos WHERE id=?', (key,)).fetchone())
+        previous = self.runner.result(key)['result']
+        self.assertIn('reasoning', previous['analysis'])
+        with self.assertRaisesRegex(RpcError, 'INVALID_SUMMARY_EVIDENCE'):
+            parse_analysis({**previous['analysis'], 'evidence': [99999]}, {0, 1})
+        self.runner.reanalyze(key)
+        self.assertEqual(self.runner.result(key)['result'], previous)
+        self.assertEqual(self.store.db.execute('SELECT checkpoint FROM videos WHERE id=?', (key,)).fetchone()[0], 0)
+        await self.runner.analyze(self.store.db.execute('SELECT * FROM videos WHERE id=?', (key,)).fetchone())
+        self.assertEqual(self.runner.result(key)['state'], 'done')
+        self.assertEqual(self.store.db.execute('SELECT COUNT(*) FROM experiences').fetchone()[0], 1)
+
+    async def test_requested_video_preempts_scheduled_work_between_segments(self):
+        scheduled = self.runner.enqueue(sample())['id']
+        original = self.model.generate
+        async def receive_request(purpose, system, text):
+            if purpose == 'segment_summary' and not self.store.db.execute("SELECT 1 FROM videos WHERE priority=0").fetchone():
+                self.runner.enqueue({**sample('2'), 'title': '好友点播'}, priority=0)
+            return await original(purpose, system, text)
+        self.model.generate = receive_request
+        await self.runner.analyze(self.store.db.execute('SELECT * FROM videos WHERE id=?', (scheduled,)).fetchone())
+        row = self.store.db.execute('SELECT state,checkpoint FROM videos WHERE id=?', (scheduled,)).fetchone()
+        self.assertEqual((row['state'], row['checkpoint']), ('queued', 1))
+        self.assertEqual(self.store.db.execute("SELECT priority FROM videos WHERE state='queued' ORDER BY priority,id LIMIT 1").fetchone()[0], 0)
 
     async def test_pause_restart_resume_from_last_completed_segment(self):
         video_id = self.runner.enqueue(sample())["id"]

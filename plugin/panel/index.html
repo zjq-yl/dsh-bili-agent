@@ -7,20 +7,22 @@
 </head>
 <body>
   <aside class="sidebar">
-    <div class="brand"><span class="brand-icon">B</span><span>B站机器人<small>DSH · 本地控制台</small></span></div>
+    <div class="brand"><span class="brand-icon" aria-hidden="true">b.</span><span>B站机器人<small>本地工作台</small></span></div>
     <nav aria-label="页面导航">
-      <a class="active" href="#overview">◫ <span>运行总览</span></a>
-      <a href="#automation">◷ <span>自动刷视频</span></a>
-      <a href="#videos">▷ <span>视频资料</span></a>
-      <a href="#messages">✉ <span>私信会话</span></a>
-      <a href="#friends-section">♧ <span>好友与推荐</span></a>
-      <a href="#persona">✧ <span>我的人设</span></a>
-      <a href="#actions">☷ <span>操作记录</span></a>
+      <p class="nav-label">工作台</p>
+      <a class="active" href="#overview"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg><span>概览</span></a>
+      <a href="#automation"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>定时浏览</span></a>
+      <a href="#videos"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3z"/></svg><span>视频库</span></a>
+      <a href="#messages"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H9l-6 3V6a2 2 0 0 1 2-2Z M7 9h10M7 13h6"/></svg><span>私信</span></a>
+      <a href="#friends-section"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M17 5a3 3 0 0 1 0 6M18 14a5 5 0 0 1 3 4v3"/></svg><span>好友</span></a>
+      <p class="nav-label">管理</p>
+      <a href="#persona"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14M5 12h14M5 20h14"/><circle cx="9" cy="4" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="10" cy="20" r="2"/></svg><span>人设与记忆</span></a>
+      <a href="#actions"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18H6zM9 8h6M9 12h6M9 16h4"/></svg><span>操作记录</span></a>
     </nav>
-    <div class="sidebar-note"><span class="dot"></span> 与 DSH 插件同步<br><small>关闭面板不会停止机器人。<br>暂停任务请使用面板中的按钮。</small></div>
+    <div class="sidebar-note">DSH 插件控制台<small>关闭页面后，任务继续运行。</small></div>
   </aside>
   <main>
-    <header><div><p class="eyebrow">BILIBILI COMPANION / <span id="page-label">运行总览</span></p><h1 id="page-title">今天，也发现一点新东西。</h1><p class="subtle" id="page-description">让好奇心有自己的节奏，把好内容留给合适的人。</p></div><div class="header-tools"><span id="connection" class="badge">连接中</span><button id="refresh" class="secondary">刷新状态</button></div></header>
+    <header><div><p class="breadcrumb">工作台 <span aria-hidden="true">/</span> <span id="page-label">概览</span></p><h1 id="page-title">运行概览</h1><p class="subtle" id="page-description">账号状态、今日计划与处理进度。</p></div><div class="header-tools"><span id="connection" class="badge neutral">连接中</span><button id="refresh" class="secondary">刷新</button></div></header>
     <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
     <section id="overview">
     <div class="stats">
@@ -30,34 +32,44 @@
       <article class="stat"><span>私信监听</span><strong id="dm-state">待连接</strong><small id="dm-detail">等待读取状态</small></article>
     </div>
     <div class="toolbar"><span id="updated" class="subtle">正在建立实时连接</span><div><button id="verify-account" class="secondary">验证 B 站账号</button><button id="verify-model" class="secondary">测试模型连接</button></div></div>
-    <article class="card live-card"><div class="section-heading"><h2>现在正在做什么</h2><span class="badge">实时进度</span></div><div id="live-activity"></div><p id="send-progress" class="hint"></p><p id="model-progress" class="subtle"></p><p id="recommendation-readiness" class="hint"></p><div id="live-requests" class="job-grid"></div></article>
-    <article class="card live-card"><div class="section-heading"><h2>运行日志</h2><span class="subtle">最新在前 · 最近 100 条</span></div><div id="runtime-log" class="runtime-log" aria-label="运行日志"></div></article>
-    <article class="day-card"><div><p class="eyebrow">TODAY'S ROUTINE</p><h2 id="daily-window">18:00 — 21:00</h2><p id="daily-detail">3 轮探索，每轮目标 5 个视频</p><div id="daily-slots" class="slot-list"></div></div><div class="day-note"><span>只把值得看的，分享给对的人。</span><p>阅读字幕 → 三档评价 → 匹配好友 → 推荐与收藏</p><a href="#automation" class="inline-route">查看自动任务 →</a></div></article>
+    <div class="overview-grid">
+    <article class="card live-card"><div class="section-heading"><h2>当前任务</h2><span class="badge">实时更新</span></div><div id="live-activity"></div><p id="send-progress" class="hint"></p><p id="model-progress" class="subtle"></p><p id="recommendation-readiness" class="hint"></p><div id="live-requests" class="job-grid"></div></article>
+    <article class="day-card"><div><p class="eyebrow">今日计划</p><h2 id="daily-window">18:00 — 21:00</h2><p id="daily-detail">3 轮 · 每轮最多 5 个视频</p><div id="daily-slots" class="slot-list"></div></div><div class="day-note"><span>按计划浏览，按兴趣推荐</span><p>总结后分为三档，仅主动推荐值得看的内容。</p><a href="#automation" class="inline-route">调整计划 →</a></div></article>
+    </div>
+    <div class="section-heading compact"><h2>最近视频评价</h2><a href="#videos" class="inline-route">查看视频库 →</a></div>
     <div class="rating-overview"><article><span class="rating-dot worth"></span><strong id="count-worth">0</strong><span>值得看</span><small>有明确价值，择优推荐</small></article><article><span class="rating-dot okay"></span><strong id="count-okay">0</strong><span>可以看</span><small>留下摘要，按需回看</small></article><article><span class="rating-dot skip"></span><strong id="count-skip">0</strong><span>没必要看</span><small>记录原因，不主动推荐</small></article></div>
+    <details class="log-panel" open><summary>运行日志 <span class="subtle">最近 100 条</span></summary><div id="runtime-log" class="runtime-log" aria-label="运行日志"></div></details>
     <p id="automation-health" class="hint"></p>
     </section>
     <section id="automation" class="card" hidden>
-      <div class="section-heading"><div><p class="eyebrow">AUTOPILOT</p><h2>给好奇心安排一个时间</h2></div><span class="badge neutral">北京时间</span></div>
+      <div class="section-heading"><div><h2>浏览计划</h2></div><span class="badge neutral">北京时间</span></div>
       <form id="automation-form">
         <div class="setting-grid">
-          <fieldset><legend>每日探索</legend><label class="check"><input id="auto-scheduled" type="checkbox">启用定时刷视频</label><div class="time-fields"><label>开始时间<input id="auto-start" type="time" required value="18:00"></label><label>结束时间<input id="auto-end" type="time" required value="21:00"></label></div><div class="time-fields"><label>轮数<input id="auto-rounds" type="number" min="1" max="6" value="3" required></label><label>每轮目标视频数<input id="auto-per-round" type="number" min="1" max="5" value="5" required></label></div><p class="subtle">轮次均匀分布在时段内。没有字幕或超时长的视频会跳过；候选不足时会如实显示。</p></fieldset>
+          <fieldset><legend>时间与数量</legend><label class="check"><input id="auto-scheduled" type="checkbox">启用定时刷视频</label><div class="time-fields"><label>开始时间<input id="auto-start" type="time" required value="18:00"></label><label>结束时间<input id="auto-end" type="time" required value="21:00"></label></div><div class="time-fields"><label>轮数<input id="auto-rounds" type="number" min="1" max="6" value="3" required></label><label>每轮目标视频数<input id="auto-per-round" type="number" min="1" max="5" value="5" required></label></div><p class="subtle">轮次均匀分布在时段内。没有字幕或超时长的视频会跳过；候选不足时会如实显示。</p></fieldset>
           <fieldset><legend>交流与推荐</legend><label class="check"><input id="auto-dm" type="checkbox">DSH 启动后自动监听私信</label><label class="check"><input id="auto-request" type="checkbox">好友索要推荐时，主动找视频</label><label class="check"><input id="auto-proactive" type="checkbox">主动推荐“值得看”的视频</label><label class="check"><input id="auto-share" type="checkbox">特别合适时附加视频转发卡片</label><p class="subtle">推荐仍需匹配好友兴趣，并受发送范围、好友开关及额度约束。卡片在推荐理由发送成功后单独发送。</p></fieldset>
-          <fieldset><legend>自己的选择</legend><label class="check"><input id="auto-actions" type="checkbox">允许模型决定点赞、收藏和不喜欢</label><label>收藏夹 ID（留空使用默认收藏夹）<input id="auto-folder" inputmode="numeric" placeholder="默认收藏夹"></label><button id="load-folders" type="button" class="secondary">读取我的收藏夹</button><p id="folder-options" class="subtle"></p><p class="subtle">未配置 App 凭据时，“不喜欢”仅记录在本地并避开后续选片，操作记录会明确标注。</p></fieldset>
-          <fieldset><legend>探索范围</legend><label>自动选择视频的最长秒数<input id="auto-duration" type="number" min="30" max="3600" value="600" required></label><p class="subtle">模型调用次数不设本地上限。自动探索由每天的时间段、轮数、每轮视频数量和时长控制；仍记录实际模型调用次数。</p></fieldset>
-        </div><div class="form-footer"><span class="subtle">设置保存在当前账号的数据目录。</span><button type="submit" class="primary">保存自动运行设置</button></div>
+          <fieldset><legend>视频互动</legend><label class="check"><input id="auto-actions" type="checkbox">允许模型决定点赞、收藏和不喜欢</label><label>收藏夹 ID（留空使用默认收藏夹）<input id="auto-folder" inputmode="numeric" placeholder="默认收藏夹"></label><button id="load-folders" type="button" class="secondary">读取我的收藏夹</button><p id="folder-options" class="subtle"></p><p class="subtle">未配置 App 凭据时，“不喜欢”仅记录在本地并避开后续选片，操作记录会明确标注。</p></fieldset>
+          <fieldset><legend>选片范围</legend><label>自动选择视频的最长秒数<input id="auto-duration" type="number" min="30" max="3600" value="600" required></label><p class="subtle">按时段、轮数、视频数和时长控制浏览量。模型调用仅统计，不设次数上限。</p></fieldset>
+        </div><div class="form-footer"><span class="subtle">设置保存在当前账号的数据目录。</span><button type="submit" class="primary">保存设置</button></div>
       </form>
-      <div class="section-heading spaced"><h3>最近的探索任务</h3><span class="subtle">定时探索与好友请求分开记录</span></div><div id="browse-jobs" class="job-grid"></div>
+      <div class="section-heading spaced"><h3>浏览记录</h3><span class="subtle">包含定时任务和好友请求</span></div><div id="browse-jobs" class="job-grid"></div>
     </section>
     <section id="videos" class="card" hidden>
-      <div class="section-heading"><div><p class="eyebrow">视频与总结</p><h2>让好内容留下来</h2></div><span class="badge neutral">字幕 / 音频分析</span></div>
-      <form id="video-form" class="input-row"><label class="grow">视频 BV 号或链接<input id="video-input" placeholder="粘贴 B 站视频链接，或输入 BV 号" required></label><label class="page-input">分 P<input id="video-page" type="number" min="1" max="1000" value="1" required></label><button class="primary" type="submit">获取字幕并入队</button></form>
+      <div class="section-heading"><div><h2>全部视频</h2><p id="library-total" class="subtle">正在读取视频库</p></div><label>分类<select id="rating-filter"><option value="">全部视频</option><option>值得看</option><option>可以看</option><option>没必要看</option><option value="unrated">待评价 / 未完成</option></select></label></div>
+      <form id="library-search" class="input-row"><label class="grow">搜索视频库<input id="library-query" type="search" maxlength="100" placeholder="搜索标题、UP 主、摘要或 BV 号"></label><button class="secondary" type="submit">搜索</button></form>
+      <p class="hint">点击封面或标题，在 B 站观看原视频；点击“查看总结”阅读分析。这里只展示实际保存的视频。</p>
+      <div id="video-assessments" class="video-library" aria-live="polite"><p class="empty">正在读取视频…</p></div>
+      <div class="library-pagination"><span id="library-page" class="subtle"></span><div><button id="library-prev" class="secondary" disabled>上一页</button><button id="library-next" class="secondary" disabled>下一页</button></div></div>
+      <details id="video-add" class="editor-panel"><summary>添加视频 / 按主题搜索</summary>
+      <form id="video-form" class="input-row"><label class="grow">视频 BV 号或链接<input id="video-input" placeholder="粘贴 B 站视频链接，或输入 BV 号" required></label><label class="page-input">分 P<input id="video-page" type="number" min="1" max="1000" value="1" required></label><button class="primary" type="submit">添加到队列</button></form>
       <div class="controls"><button id="resume" class="primary">开始 / 继续分析</button><button id="pause" class="secondary">暂停分析</button><span class="subtle">入队后点击开始；无字幕时可通过媒体工具获取音频并转写。</span></div>
       <details class="discovery"><summary>按主题自动找视频</summary><form id="discover-form" class="input-row"><label class="grow">感兴趣的主题<input id="keyword" placeholder="例如：Python 入门、天文科普" maxlength="100" required></label><button class="secondary" type="submit">开始发现</button></form><p class="subtle">每次最多搜索 3 轮。切换主题前先暂停分析。</p></details>
+      </details>
+      <details class="editor-panel"><summary>最近任务与错误</summary>
       <div class="table-wrap"><table><thead><tr><th>任务 / 视频</th><th>状态</th><th>已分析片段</th><th>操作</th></tr></thead><tbody id="tasks"><tr><td colspan="4" class="empty">正在读取任务…</td></tr></tbody></table></div>
-      <div class="section-heading spaced"><h3>我的视频评价</h3><label>筛选<select id="rating-filter"><option value="">全部评价</option><option>值得看</option><option>可以看</option><option>没必要看</option></select></label></div><div id="video-assessments" class="review-grid"></div>
+      </details>
     </section>
     <section id="messages" class="card" hidden>
-      <div class="section-heading"><div><p class="eyebrow">私信与回复</p><h2>从一句“你好”开始</h2></div><span id="send-badge" class="badge neutral">读取中</span></div>
+      <div class="section-heading"><div><h2>消息监听</h2></div><span id="send-badge" class="badge neutral">读取中</span></div>
       <p id="dm-scope" class="subtle">正在读取允许回复的账号…</p>
       <div class="controls"><button id="listen-preview" class="secondary">监听并生成草稿</button><button id="listen-auto" class="primary">开启自动回复</button><button id="listen-stop" class="secondary">停止监听</button></div>
       <p class="hint">每 60 秒检查新私信，处理监听启动后收到的消息。自动回复需要插件已开启发送，并配置接收者 UID；切换模式前先停止监听。</p>
@@ -73,23 +85,25 @@
       <div class="draft-heading"><h3>最近回复</h3><span class="subtle">草稿、已发送与待确认的消息</span></div><div id="outbox" class="drafts"><p class="empty">还没有回复记录</p></div>
     </section>
     <section id="friends-section" class="card" hidden>
-      <div class="section-heading"><div><p class="eyebrow">好友与推荐</p><h2>把喜欢的内容，分享给对的人</h2></div></div>
-      <p class="hint">只从“值得看”的视频中，由模型结合好友兴趣选择推荐，附上具体理由、摘要和链接。开启好友自动发送后可以主动推荐；特别合适时附加视频卡片。每位好友对同一视频只推荐一次。</p>
+      <div class="section-heading"><div><h2>好友列表</h2></div></div>
+      <p class="hint">按好友兴趣推荐值得看的视频，附理由、摘要和链接。同一视频不重复推荐。</p>
+      <div id="friends" class="drafts"><p class="empty">尚未添加好友档案</p></div>
+      <details id="friend-editor" class="editor-panel"><summary>添加 / 编辑好友</summary>
       <form id="friend-form">
         <div class="persona-grid"><div><label>好友 UID<input id="friend-uid" inputmode="numeric" pattern="[1-9][0-9]{0,29}" placeholder="数字 UID，不是昵称" required></label><label>好友昵称<input id="friend-name" maxlength="50" placeholder="例如：艺黎7" required></label><label>分类<input id="friend-category" value="好友" maxlength="30" required></label></div><div><label>兴趣关键词（逗号分隔）<input id="friend-interests" placeholder="例如：编程，Python，科技" required></label><label>性格与表达偏好<textarea id="friend-style" rows="3" maxlength="500" placeholder="例如：喜欢简短直接的回复，遇到技术内容可以多讲细节"></textarea></label></div></div>
         <div class="setting-grid">
-          <fieldset><legend>推荐要适合什么需求</legend><label>长期推荐模式<select id="friend-mode"><option value="learning">学习：基础、目标与内容依据</option><option value="leisure">休闲：兴趣与观看负担</option></select></label><label>已有水平<input id="friend-level" maxlength="100" placeholder="例如：会变量和循环，刚开始学函数"></label><label>学习目标<textarea id="friend-goal" maxlength="500" rows="3" placeholder="例如：学会用 Python 整理 Excel 表格"></textarea></label><label>偏好最长视频秒数（0 表示不额外限制）<input id="friend-max-seconds" type="number" min="0" max="21600" value="0" required></label></fieldset>
-          <fieldset><legend>主动推荐的节奏</legend><label>每天最多主动推荐几个视频<input id="friend-daily-limit" type="number" min="0" max="10" value="3" required></label><div class="time-fields"><label>允许推送开始<input id="friend-push-start" type="time" value="09:00" required></label><label>允许推送结束<input id="friend-push-end" type="time" value="22:00" required></label></div><p class="subtle">北京时间；支持跨午夜，开始与结束相同表示全天。每日数量在北京时间零点重置。点播回复单独处理。</p><label>避开关键词<input id="friend-blocked-keywords" placeholder="逗号分隔，最多30项"></label><label>不再推荐的 UP 主 UID 或名称<input id="friend-blocked-authors" placeholder="优先填写数字UID，逗号分隔"></label></fieldset>
+          <fieldset><legend>推荐偏好</legend><label>长期推荐模式<select id="friend-mode"><option value="learning">学习：基础、目标与内容依据</option><option value="leisure">休闲：兴趣与观看负担</option></select></label><label>已有水平<input id="friend-level" maxlength="100" placeholder="例如：会变量和循环，刚开始学函数"></label><label>学习目标<textarea id="friend-goal" maxlength="500" rows="3" placeholder="例如：学会用 Python 整理 Excel 表格"></textarea></label><label>偏好最长视频秒数（0 表示不额外限制）<input id="friend-max-seconds" type="number" min="0" max="21600" value="0" required></label></fieldset>
+          <fieldset><legend>推送设置</legend><label>每天最多主动推荐几个视频<input id="friend-daily-limit" type="number" min="0" max="5" value="5" required></label><div class="time-fields"><label>允许推送开始<input id="friend-push-start" type="time" value="09:00" required></label><label>允许推送结束<input id="friend-push-end" type="time" value="22:00" required></label></div><p class="subtle">北京时间；支持跨午夜，开始与结束相同表示全天。每日数量在北京时间零点重置。点播回复单独处理。</p><label>避开关键词<input id="friend-blocked-keywords" placeholder="逗号分隔，最多30项"></label><label>不再推荐的 UP 主 UID 或名称<input id="friend-blocked-authors" placeholder="优先填写数字UID，逗号分隔"></label></fieldset>
         </div>
         <div class="controls"><label class="check"><input id="friend-recommend" type="checkbox" checked> 为这位好友生成推荐</label><label class="check"><input id="friend-auto" type="checkbox"> 自动发送推荐（需发送权限）</label><button class="primary" type="submit">保存好友</button></div>
-      </form><div id="friends" class="drafts"><p class="empty">尚未添加好友档案</p></div>
+      </form></details>
       <p id="recommendation-status" class="subtle"></p>
-      <div class="section-heading spaced"><h3>告诉我这次推荐怎么样</h3></div>
+      <details id="feedback-editor" class="editor-panel"><summary>推荐反馈</summary>
       <form id="feedback-form" class="input-row"><label>接收者 UID<input id="feedback-peer" pattern="[1-9][0-9]{0,29}" required></label><label>视频 BV 号<input id="feedback-bvid" pattern="BV[0-9A-Za-z]{10}" required></label><label>反馈<select id="feedback-kind"><option value="like">喜欢，希望以后参考</option><option value="too_basic">太基础</option><option value="too_hard">太难</option><option value="too_long">太长，优先短一点</option><option value="not_interested">不感兴趣</option><option value="seen">已经看过</option><option value="block_author">不要这个 UP</option></select></label><button type="submit" class="secondary">保存反馈</button></form>
-      <p class="hint">也可以直接私信：学习模式、休闲模式、学习目标：…、我的水平：…、今天先别发、暂停推荐、恢复推荐。反馈可发送“BV号 太长”等；多条视频时会要求你指定BV号，避免记错对象。</p><div id="feedback-history" class="activity-list"></div>
+      <p class="hint">也可以直接私信：学习模式、休闲模式、学习目标：…、我的水平：…、今天先别发、暂停推荐、恢复推荐。反馈可发送“BV号 太长”等；多条视频时会要求你指定BV号，避免记错对象。</p><div id="feedback-history" class="activity-list"></div></details>
     </section>
     <section id="persona" class="card" hidden>
-      <div class="section-heading"><div><p class="eyebrow">角色与记忆</p><h2>慢慢熟悉，保持自己</h2></div></div>
+      <div class="section-heading"><div><h2>角色设置</h2></div></div>
       <div class="persona-grid">
         <form id="profile-form">
           <label>角色名字<input id="profile-name" maxlength="30" required></label>
@@ -97,15 +111,15 @@
           <label>优先观看的关键词<input id="profile-preferred" placeholder="编程，科技，学习方法"></label>
           <label>自主选片时避开的关键词<input id="profile-avoided" placeholder="用逗号分隔，可留空"></label>
           <p class="subtle">每项最多20个关键词，每个最多50字。用于当前搜索结果的标题匹配，不是完整内容过滤。</p>
-          <label>完整人设提示词<textarea id="profile-persona" rows="24" maxlength="12000" required></textarea></label>
+          <label>完整人设提示词<textarea id="profile-persona" rows="16" maxlength="12000" required></textarea></label>
           <p class="subtle">可修改性格、偏好、说话方式和边界，最多12000字。保存后用于下一次私信回复和视频感受；不改变已有总结、草稿或发送权限。</p>
           <button type="submit" class="secondary">保存角色</button>
         </form>
-        <div><form id="memory-form"><label>搜索已经看过的内容<input id="memory-query" placeholder="输入关键词查找视频记忆" maxlength="100" required></label><button type="submit" class="secondary">检索记忆</button></form><div id="memories" class="memory-results"><p class="subtle">视频总结完成后，经历会保存在本地。</p></div></div>
+        <div class="memory-column"><h3>历史记忆</h3><form id="memory-form"><label>搜索已经看过的内容<input id="memory-query" placeholder="输入关键词查找视频记忆" maxlength="100" required></label><button type="submit" class="secondary">检索记忆</button></form><div id="memories" class="memory-results"><p class="subtle">视频总结完成后，经历会保存在本地。</p></div></div>
       </div>
     </section>
-    <section id="actions" class="card" hidden><div class="section-heading"><div><p class="eyebrow">ACTIVITY LOG</p><h2>每个选择，都有理由</h2></div><span class="badge neutral">点赞 · 收藏 · 不喜欢</span></div><p class="hint">已确认、待确认、本地记录会分别展示。发送结果不确定时不会自动重试，避免重复操作。</p><div id="action-list" class="activity-list"></div></section>
-    <footer>数据保存在本地 · 内容理解基于字幕或音频转写 · <span id="version">开发版</span></footer>
+    <section id="actions" class="card" hidden><div class="section-heading"><div><h2>互动记录</h2></div><span class="badge neutral">点赞 · 收藏 · 不喜欢</span></div><p class="hint">已确认、待确认、本地记录会分别展示。发送结果不确定时不会自动重试，避免重复操作。</p><div id="action-list" class="activity-list"></div></section>
+    <footer>本地存储 · 字幕与音频分析 · <span id="version">开发版</span></footer>
   </main>
   <dialog id="result-dialog"><div class="dialog-heading"><h2 id="result-title">视频总结</h2><button id="close-result" class="secondary" aria-label="关闭总结">关闭</button></div><div id="result-body"></div></dialog>
 </body>

@@ -13,7 +13,6 @@ from .model import RECOVERABLE_MODEL_ERRORS
 
 
 MAX_MESSAGE_LENGTH = 800
-MAX_DAILY_SENDS = 20
 MIN_SEND_INTERVAL = 60
 POLL_INTERVAL = 60
 
@@ -152,13 +151,18 @@ class Messaging:
     def delivery_window(self) -> dict:
         """Expose the earliest quota-eligible send time; it is not a delivery promise."""
         now = time.time()
-        day = int(now // 86400) * 86400
+        day = int((now + 8 * 3600) // 86400) * 86400 - 8 * 3600
         used = self.db.execute('SELECT COUNT(*) FROM dm_outbox WHERE account=? AND attempted>=?', (self.account, day)).fetchone()[0]
         last = self.db.execute('SELECT MAX(attempted) FROM dm_outbox WHERE account=?', (self.account,)).fetchone()[0]
-        earliest = max(now, (last + MIN_SEND_INTERVAL) if last is not None else now,
-                       day + 86400 if used >= MAX_DAILY_SENDS else now)
-        return {'used': used, 'limit': MAX_DAILY_SENDS, 'next_at': earliest,
-                'reason': 'DM_DAILY_LIMIT' if used >= MAX_DAILY_SENDS else 'DM_SEND_INTERVAL' if earliest > now else None}
+        earliest = max(now, (last + MIN_SEND_INTERVAL) if last is not None else now)
+        return {'used': used, 'limit': None, 'next_at': earliest,
+                'reason': 'DM_SEND_INTERVAL' if earliest > now else None}
+
+    def priority_pending(self) -> bool:
+        """Keep proactive pushes behind conversation replies and explicitly requested results."""
+        return bool(self.db.execute("""SELECT 1 FROM dm_outbox WHERE account=? AND state='draft'
+            AND ((source_key IS NOT NULL AND ?=1) OR command_id LIKE 'req-%' OR command_id LIKE 'request-%') LIMIT 1""",
+            (self.account, int(self.auto_send))).fetchone())
 
     async def sync(self, peer=None):
         self.begin_activity('sync', 'sync', '开始检查私信会话与新消息')
@@ -318,13 +322,8 @@ class Messaging:
         except (ValueError, TypeError, KeyError, RpcError):
             raise RpcError(-32040, 'INVALID_DM_REPLY') from None
         if context['can_find_recommendations'] and value.get('recommend_request') is not None:
-            try:
-                self.recommendations.request(peer, key, value['recommend_request'])
-                reply = reply or '收到，我会按你的要求查找并分析视频，结果会通过这里回复；如果遇到额度或内容限制，也会告诉你。'
-            except RpcError as exc:
-                if str(exc) != 'RECOMMENDATION_REQUEST_LIMIT':
-                    raise
-                reply = '最近的找视频请求比较多，先等已有任务处理完，稍后再帮你找。'
+            self.recommendations.request(peer, key, value['recommend_request'])
+            reply = reply or '收到，我会先查已分析的视频，不够再找新的，结果会通过这里回复；如果遇到处理问题，也会告诉你。'
         if reply is None:
             with self.db:
                 self.db.execute("UPDATE dm_messages SET state='silent' WHERE account=? AND msg_key=?", (account, key))
@@ -397,10 +396,11 @@ class Messaging:
                 raise RpcError(-32040, 'DM_CSRF_REQUIRED')
             now = time.time()
             with self.db:
-                count = self.db.execute('SELECT COUNT(*) FROM dm_outbox WHERE account=? AND attempted>=?', (self.account, int(now // 86400) * 86400)).fetchone()[0]
                 last = self.db.execute('SELECT MAX(attempted) FROM dm_outbox WHERE account=?', (self.account,)).fetchone()[0]
-                if count >= MAX_DAILY_SENDS or (last is not None and now - last < MIN_SEND_INTERVAL):
+                if last is not None and now - last < MIN_SEND_INTERVAL:
                     raise RpcError(-32040, 'DM_SEND_LIMIT')
+                if self.friends:
+                    self.friends.guard_delivery(row)
                 if row['source_key'] and not self.db.execute('SELECT 1 FROM dm_messages WHERE account=? AND msg_key=? AND deleted=0', (self.account, row['source_key'])).fetchone():
                     raise RpcError(-32040, 'SOURCE_DELETED')
                 self.db.execute("UPDATE dm_outbox SET state='sending',attempted=? WHERE id=?", (now, draft_id))

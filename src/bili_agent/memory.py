@@ -7,10 +7,11 @@ from pathlib import Path
 from .protocol import RpcError
 
 TOPICS = ("科技", "编程", "游戏", "音乐", "影视", "生活", "知识", "其他")
-DEFAULT_PROFILE = {"name": "小岚", "style": "表达自然、简洁，有好奇心；区分事实与个人感受，不假装看过未观察到的内容。"}
+DEFAULT_PROFILE = {"name": "小黎", "style": "温和、好奇、有主见，中文表达自然直接，偶尔轻幽默；关注前沿科技与大模型，也能轻松聊日常，区分事实、传闻和个人感受。"}
 DEFAULT_PERSONA = (Path(__file__).parent / 'prompts/persona.md').read_text(encoding='utf-8')
 PROFILE_DEFAULTS = {**DEFAULT_PROFILE, 'persona': DEFAULT_PERSONA,
-                    'preferred_keywords': ['编程', '科技', '学习方法', '知识'], 'avoided_keywords': []}
+                    'preferred_keywords': ['DeepSeek', 'ChatGPT', 'Claude Code', 'Claude', '大模型动态',
+                                           '前沿科技', 'AI编程', '开源模型', '人工智能', '机器人'], 'avoided_keywords': []}
 
 
 class Memory:

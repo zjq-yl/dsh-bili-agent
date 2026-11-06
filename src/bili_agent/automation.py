@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from .protocol import RpcError
 from .content import summary_json
+from .library import history_candidates
 
 BEIJING = timezone(timedelta(hours=8))
 DEFAULTS = {'dm_auto_start': True, 'scheduled': True, 'start_time': '18:00', 'end_time': '21:00',
@@ -72,6 +73,8 @@ class Automation:
             self.db.execute('ALTER TABLE browse_jobs ADD COLUMN selection_attempt TEXT')
         if 'requirements' not in {row[1] for row in self.db.execute('PRAGMA table_info(browse_jobs)')}:
             self.db.execute("ALTER TABLE browse_jobs ADD COLUMN requirements TEXT NOT NULL DEFAULT '{}'")
+        if 'history_checked' not in {row[1] for row in self.db.execute('PRAGMA table_info(browse_jobs)')}:
+            self.db.execute('ALTER TABLE browse_jobs ADD COLUMN history_checked INTEGER NOT NULL DEFAULT 0')
         with self.db:
             self.db.execute('INSERT OR IGNORE INTO automation_settings VALUES(1,?,?)', (json.dumps(DEFAULTS), time.time()))
         row = self.db.execute('SELECT * FROM automation_settings').fetchone()
@@ -195,10 +198,6 @@ class Automation:
             return dict(existing)
         if not self.db.execute('SELECT 1 FROM dm_messages WHERE account=? AND peer=? AND msg_key=? AND direction="incoming" AND deleted=0', (account, peer, source_key)).fetchone():
             raise RpcError(-32602, 'INCOMING_MESSAGE_NOT_FOUND')
-        recent = self.db.execute('SELECT COUNT(*),MAX(created) FROM browse_jobs WHERE account=? AND peer=? AND created>=?',
-                                 (account, peer, int(time.time() // 86400) * 86400)).fetchone()
-        if recent[0] >= 3 or (recent[1] and time.time() - recent[1] < 600):
-            raise RpcError(-32040, 'RECOMMENDATION_REQUEST_LIMIT')
         with self.db:
             key = self.db.execute('''INSERT INTO browse_jobs(account,event_key,kind,peer,source_key,keyword,rounds,wanted,created)
                 VALUES(?,?,'request',?,?,?,?,?,?)''', (account, event, peer, source_key, value['keyword'].strip(),
@@ -207,6 +206,32 @@ class Automation:
         self.wake.set()
         self.store.event('request', '收到推荐请求，已加入查找队列', str(key))
         return {'id': key, 'state': 'queued'}
+
+    async def prepare_history(self, job) -> bool:
+        """Try saved summaries before searching; insufficient matches fall through to fresh browsing."""
+        if job['kind'] != 'request' or job['history_checked'] == 2:
+            return False
+        if not job['history_checked']:
+            candidates = history_candidates(self.db, job['account'], job['keyword'])
+            candidates = [item for item in candidates if self.social.matches(job['peer'], item, json.loads(job['requirements']).get('max_seconds'))]
+            with self.db:
+                for item in candidates:
+                    self.db.execute('INSERT OR IGNORE INTO browse_items VALUES(?,?,?,NULL)', (job['id'], item['bvid'], item['id']))
+                self.db.execute('UPDATE browse_jobs SET history_checked=? WHERE id=?', (1 if candidates else 2, job['id']))
+            self.store.event('request', f'先检索历史库：找到 {len(candidates)} 个候选，按需求进一步筛选', str(job['id']))
+            if not candidates:
+                return False
+        unreviewed = self.db.execute('''SELECT 1 FROM browse_items i JOIN videos v ON v.id=i.video_id
+            LEFT JOIN video_decisions d ON d.account=? AND d.bvid=v.bvid
+            WHERE i.job_id=? AND v.state='done' AND d.bvid IS NULL LIMIT 1''', (job['account'], job['id'])).fetchone()
+        if unreviewed:
+            return True
+        if await self.finish_request(job, early=True):
+            return True
+        with self.db:
+            self.db.execute('UPDATE browse_jobs SET history_checked=2 WHERE id=?', (job['id'],))
+        self.store.event('request', '历史结果不足，继续即时搜索补充', str(job['id']))
+        return False
 
     def job_allowed(self, job) -> bool:
         if job['kind'] == 'request':
@@ -250,7 +275,7 @@ class Automation:
             self.step('获取视频字幕', candidate['bvid'])
             cached = self.db.execute("SELECT document FROM videos WHERE bvid=? AND state='done' ORDER BY id LIMIT 1", (candidate['bvid'],)).fetchone() if job['kind'] == 'request' else None
             document = json.loads(cached[0]) if cached else await self.platform.request('fetch', {'bvid': candidate['bvid'], 'page': 1})
-            if document['duration'] > self.config['max_video_seconds']:
+            if job['kind'] == 'scheduled' and document['duration'] > self.config['max_video_seconds']:
                 error = 'VIDEO_EXCEEDS_AUTOMATION_DURATION'
             elif job['kind'] == 'request' and not self.social.matches(job['peer'], document, json.loads(job['requirements']).get('max_seconds')):
                 error = 'VIDEO_EXCLUDED_BY_PREFERENCES'
@@ -425,7 +450,8 @@ class Automation:
             return
         rows = self.db.execute('''SELECT o.* FROM dm_outbox o WHERE o.account=? AND o.state='draft'
             AND (EXISTS(SELECT 1 FROM request_deliveries d WHERE d.draft_id=o.id OR d.draft_id=o.depends_on)
-                 OR o.card_bvid IS NOT NULL) ORDER BY o.created LIMIT 20''', (self.dm.account,)).fetchall()
+                 OR o.card_bvid IS NOT NULL)
+            ORDER BY EXISTS(SELECT 1 FROM request_deliveries d WHERE d.draft_id=o.id OR d.draft_id=o.depends_on) DESC,o.created LIMIT 20''', (self.dm.account,)).fetchall()
         for row in rows:
             if row['peer'] not in self.dm.allowed_peers:
                 continue
@@ -436,6 +462,8 @@ class Automation:
                 if not self.job_allowed(job):
                     continue
             elif not self.config['proactive_enabled'] or not friend or not friend['auto_send'] or not friend['recommend']:
+                continue
+            elif self.dm.priority_pending():
                 continue
             elif row['card_bvid']:
                 delivery = self.social.delivery_status(row['peer'])
@@ -458,7 +486,14 @@ class Automation:
                         with self.db:
                             self.db.execute("UPDATE dm_outbox SET state='cancelled',error='CARD_PARENT_NOT_CONFIRMED' WHERE id=?", (row['id'],))
                     continue
-            await self.dm.publish(row['id'])
+            try:
+                await self.dm.publish(row['id'])
+            except RpcError as exc:
+                if str(exc) == 'RECOMMENDATION_CARD_EXPIRED':
+                    with self.db:
+                        self.db.execute("UPDATE dm_outbox SET state='cancelled',error=? WHERE id=?", (str(exc), row['id']))
+                    continue
+                raise
             self.update_deliveries()
             break
 
@@ -527,9 +562,14 @@ class Automation:
         if not self.video_paused:
             jobs = self.db.execute("SELECT * FROM browse_jobs WHERE account=? AND state IN ('queued','browsing') ORDER BY CASE kind WHEN 'request' THEN 0 ELSE 1 END,id LIMIT 20", (self.dm.account,)).fetchall()
             job = next((job for job in jobs if self.job_allowed(job)), None)
+            pending_request = any(self.job_allowed(item) for item in self.db.execute(
+                "SELECT * FROM browse_jobs WHERE account=? AND kind='request' AND state='waiting'", (self.dm.account,)))
+            if job and job['kind'] == 'scheduled' and pending_request:
+                job = None
             if job:
                 try:
-                    await self.browse(job)
+                    if not await self.prepare_history(job):
+                        await self.browse(job)
                 except RpcError as exc:
                     with self.db:
                         self.db.execute('UPDATE browse_jobs SET error=? WHERE id=?', (str(exc), job['id']))
@@ -539,7 +579,8 @@ class Automation:
             LEFT JOIN video_decisions d ON d.account=? AND d.bvid=v.bvid
             WHERE v.state='done' AND (e.created>=? OR EXISTS(SELECT 1 FROM browse_items i JOIN browse_jobs j ON j.id=i.job_id
                 WHERE i.video_id=v.id AND j.account=? AND j.state IN ('queued','browsing','waiting')))
-            AND d.bvid IS NULL ORDER BY e.created LIMIT 1''', (self.dm.account, self.created, self.dm.account)).fetchone()
+            AND d.bvid IS NULL ORDER BY EXISTS(SELECT 1 FROM browse_items i JOIN browse_jobs j ON j.id=i.job_id
+                WHERE i.video_id=v.id AND j.kind='request' AND j.state IN ('queued','browsing','waiting')) DESC,e.created LIMIT 1''', (self.dm.account, self.created, self.dm.account)).fetchone()
         if row and (self.config['actions_enabled'] or self.config['proactive_enabled'] or self.config['request_enabled']):
             try:
                 await self.review(row)

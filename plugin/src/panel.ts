@@ -8,7 +8,7 @@ import type { ModelSelection } from './model.js'
 export type PanelStatus = { state: 'disabled' | 'starting' | 'ready' | 'failed' | 'stopped'; url?: string; error?: string }
 
 const methods = new Set([
-  'model.check', 'platform.enqueue', 'agent.start', 'agent.pause', 'agent.stop', 'agent.retry', 'agent.result',
+  'model.check', 'platform.enqueue', 'agent.start', 'agent.pause', 'agent.stop', 'agent.retry', 'agent.result', 'agent.reanalyze', 'library.list', 'library.refresh',
   'memory.profile', 'memory.configure', 'memory.recall',
   'dm.account', 'dm.status', 'dm.sync', 'dm.history', 'dm.reply', 'dm.compose', 'dm.send',
   'dm.start', 'dm.stop', 'dm.memory', 'dm.summarize',
@@ -74,7 +74,7 @@ export async function startPanel(
     res.setHeader('cache-control', 'no-store')
     res.setHeader('x-content-type-options', 'nosniff')
     res.setHeader('referrer-policy', 'no-referrer')
-    res.setHeader('content-security-policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+    res.setHeader('content-security-policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' https://*.hdslb.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
     if (req.headers.host !== new URL(origin).host) return json(res, 403, { error: 'INVALID_HOST' })
     const path = new URL(req.url || '/', origin).pathname
     const asset = files.get(path)

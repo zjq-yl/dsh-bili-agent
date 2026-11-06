@@ -1,6 +1,7 @@
 """Python 进程入口：组装业务服务、分发 RPC，并管理任务生命周期。"""
 import argparse
 import asyncio
+import json
 import os
 from pathlib import Path
 
@@ -15,6 +16,8 @@ from .runner import Runner
 from .store import Store
 from .social import Social
 from .automation import Automation
+from .library import browse as browse_library
+from .content import validate_video
 
 
 class Runtime:
@@ -50,6 +53,25 @@ class Runtime:
                     "recent_model_calls": self.store.call_status()}
         if method == "agent.status":
             return self.runner.status()
+        if method == 'library.list':
+            return browse_library(self.store.db, self.messaging.account, params.get('query', ''), params.get('rating', ''),
+                                  params.get('offset', 0), params.get('limit', 12))
+        if method == 'library.refresh':
+            video_id = params.get('video_id')
+            if type(video_id) is not int or video_id <= 0:
+                raise RpcError(-32602, 'INVALID_VIDEO_ID')
+            row = self.store.db.execute('SELECT document FROM videos WHERE id=?', (video_id,)).fetchone()
+            if not row:
+                raise RpcError(-32602, 'VIDEO_NOT_FOUND')
+            document = json.loads(row['document'])
+            metadata = await self.platform.request('metadata', {'bvid': document['bvid'], 'page': document['page']})
+            if metadata['cid'] != document['cid']:
+                raise RpcError(-32010, 'VIDEO_PART_CHANGED')
+            clean = validate_video({**document, **metadata})
+            document.update({key: clean[key] for key in ('title', 'cover', 'author', 'author_uid')})
+            with self.store.db:
+                self.store.db.execute('UPDATE videos SET document=? WHERE id=?', (json.dumps(document, ensure_ascii=False), video_id))
+            return {'updated': True, 'has_cover': bool(clean['cover'])}
         if method == 'automation.status':
             return self.automation.status()
         if method == 'automation.configure':
@@ -99,10 +121,12 @@ class Runtime:
         if method in ("agent.pause", "agent.stop"):
             self.automation.video_paused = True
             return await self.runner.pause("PAUSED" if method == "agent.pause" else "STOPPED")
-        if method in ("agent.result", "agent.retry"):
+        if method in ("agent.result", "agent.retry", "agent.reanalyze"):
             video_id = params.get("video_id")
             if type(video_id) is not int or video_id <= 0:
                 raise RpcError(-32602, "INVALID_VIDEO_ID")
+            if method == 'agent.reanalyze':
+                return self.runner.reanalyze(video_id)
             return self.runner.result(video_id) if method == "agent.result" else self.runner.retry(video_id)
         if method == "model.check":
             return {"text": await self.model.generate("check", "请简短回答。", "只输出：模型连接正常")}

@@ -71,7 +71,7 @@ class Platform:
                 await asyncio.sleep(delay)
             try:
                 async with asyncio.timeout(60):
-                    handlers = {"search": self.search, "fetch": self.fetch, "audio": self.audio,
+                    handlers = {"search": self.search, "fetch": self.fetch, "audio": self.audio, 'metadata': self.metadata,
                                 "identity": self.identity, "sessions": self.sessions, "messages": self.messages,
                                 "send_dm": self.send_dm, "share_video": self.share_video,
                                 "video_action": self.video_action, "favorite_folders": self.favorite_folders}
@@ -169,6 +169,13 @@ class Platform:
         finally:
             request_settings.set_wbi_retry_times(previous)
 
+    async def metadata(self, params: dict) -> dict:
+        """Refresh public display metadata without downloading media or invoking a model."""
+        _, info, part = await self.video_part(params)
+        return {'cid': str(part['cid']), 'title': str(info.get('title', ''))[:300],
+                'cover': info.get('pic', ''), 'author': str((info.get('owner') or {}).get('name', ''))[:100],
+                'author_uid': str((info.get('owner') or {}).get('mid') or '')}
+
     async def favorite_folders(self, params: dict) -> dict:
         """List the verified account's folders without creating or changing a folder."""
         from bilibili_api import favorite_list
@@ -223,6 +230,8 @@ class Platform:
         track = min(tracks, key=lambda t: int(t.get("bandwidth", 0)))
         return {"bvid": params["bvid"], "cid": str(part["cid"]), "page": params.get("page", 1),
                 "title": str(info.get("title", ""))[:300], "duration": part["duration"],
+                'cover': info.get('pic', ''), 'author': str((info.get('owner') or {}).get('name', ''))[:100],
+                'author_uid': str((info.get('owner') or {}).get('mid') or ''),
                 "url": track.get("baseUrl") or track.get("base_url"), "track_id": str(track.get("id", ""))}
 
     async def search(self, params):
@@ -274,7 +283,7 @@ class Platform:
         result = validate_video({"bvid": bvid, "cid": cid, "title": str(info.get("title", ""))[:300],
                                  "duration": part["duration"], "subtitles": subtitles, "page": page,
                                  'author': str((info.get('owner') or {}).get('name', ''))[:100],
-                                 'author_uid': str((info.get('owner') or {}).get('mid') or '')})
+                                 'author_uid': str((info.get('owner') or {}).get('mid') or ''), 'cover': info.get('pic', '')})
         result.update({"page": page, "subtitle_language": selected.get("lan"),
                        "subtitle_generated": str(selected.get("lan", "")).startswith("ai-"), "source": "bilibili_subtitles"})
         return result

@@ -66,8 +66,12 @@ try {
   const headers = { Authorization: `Bearer ${panelUrl.hash.slice(1)}`, Origin: panelUrl.origin, 'Content-Type': 'application/json' }
   const panelHealth = await fetch(`${panelUrl.origin}/api/status`, { headers })
   assert.equal((await panelHealth.json()).pid, status.pid)
+  const library = await fetch(`${panelUrl.origin}/api/action`, { method: 'POST', headers,
+    body: JSON.stringify({ method: 'library.list', params: { rating: '值得看', limit: 12 } }) })
+  assert.equal(library.status, 200)
+  assert.equal((await library.json()).total, 0)
   const panelAction = await fetch(`${panelUrl.origin}/api/action`, { method: 'POST', headers, body: JSON.stringify({ method: 'memory.profile', params: {} }) })
-  assert.equal((await panelAction.json()).name, '小岚')
+  assert.equal((await panelAction.json()).name, '小黎')
   const autoTool = definitions.find(d => d.name === 'bili_agent_automation')
   const auto = JSON.parse(await autoTool.execute({ action: 'status' }, exec))
   assert.deepEqual(auto.slots, ['18:00', '19:00', '20:00'])
