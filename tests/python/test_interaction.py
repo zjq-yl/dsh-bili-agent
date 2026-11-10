@@ -48,10 +48,10 @@ class InteractionTests(unittest.IsolatedAsyncioTestCase):
     async def test_video_agent_owns_proactive_push_and_chat_agent_does_not_send_it(self):
         row = await self.analyzed()
         self.assertEqual(self.video.assessment(row['id'])['rating'], '值得看')
-        self.assertEqual(len(self.dm.status()['outbox']), 2)
+        self.assertEqual(len(self.dm.status()['outbox']), 1)
         self.interaction.prepare_results()
         self.interaction.prepare_results()
-        self.assertEqual(len(self.dm.status()['outbox']), 2)
+        self.assertEqual(len(self.dm.status()['outbox']), 1)
         await self.interaction.send_pending()
         self.assertEqual(self.platform.sent, [])
 

@@ -193,7 +193,7 @@ export function registerTools(
     parameters: {
       action: { type: 'string', required: true, description: 'status/configure/folders/retry_review；retry_review仅重新评价失败的视频，不重跑总结' },
       video_id: { type: 'integer', description: 'retry_review的失败评价视频ID' },
-      config_json: { type: 'string', description: 'configure的JSON配置：discovery_source（popular_first热门优先，search兴趣搜索）、dm_auto_start、scheduled、start_time、end_time、rounds、per_round、request_enabled、actions_enabled、proactive_enabled、share_cards、favorite_folder、max_video_seconds、comments_enabled、comment_daily_limit（0至10，默认3）；省略字段保持原值。视频Agent主动推荐，聊天Agent负责好友点播及公开评论。' },
+      config_json: { type: 'string', description: 'configure的JSON配置：discovery_source（popular_first热门优先，home_feed_first首页推荐优先，search兴趣搜索）、dm_auto_start、scheduled、start_time、end_time、rounds、per_round、request_enabled、actions_enabled、proactive_enabled、share_cards、favorite_folder、max_video_seconds、comments_enabled、comment_daily_limit（0至10，默认3）；省略字段保持原值。视频Agent主动推荐，聊天Agent负责好友点播及公开评论。' },
     },
     output: textOutput,
     async execute(args, exec: ExecutionContext) {

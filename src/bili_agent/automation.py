@@ -1,6 +1,7 @@
 """Durable browsing windows, friend requests and model-selected video actions."""
 import asyncio
 import json
+import math
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -15,7 +16,7 @@ DEFAULTS = {'dm_auto_start': True, 'scheduled': True, 'start_time': '18:00', 'en
             'proactive_enabled': True, 'share_cards': True, 'favorite_folder': '',
             'max_video_seconds': 600, 'comments_enabled': True, 'comment_daily_limit': 3,
             'discovery_source': 'popular_first', 'mentions_enabled': True}
-TRANSIENT = {'MODEL_BUSY', 'PLATFORM_BUSY', 'DM_SEND_BUSY', 'DM_SEND_LIMIT'}
+TRANSIENT = {'MODEL_BUSY', 'PLATFORM_BUSY', 'DM_SEND_BUSY', 'DM_SEND_LIMIT', 'MEDIA_BUSY'}
 
 
 def require(condition: bool) -> None:
@@ -35,12 +36,12 @@ def minutes(value: str) -> int:
 class VideoAgent:
     """Own discovery, analysis, three-tier ratings and durable results for the Interaction Agent."""
 
-    def __init__(self, store, runner, messaging, social, platform, model, data_dir):
+    def __init__(self, store, runner, messaging, social, platform, model, data_dir, media=None):
         self.db, self.runner, self.dm, self.social = store.db, runner, messaging, social
         self.store = store
         self.activity = None
         self.delivery_error = None
-        self.platform, self.model, self.data_dir = platform, model, data_dir
+        self.platform, self.model, self.data_dir, self.media = platform, model, data_dir, media
         self.task, self.error = None, None
         self.dm_paused = self.video_paused = False
         self.start_attempted = False
@@ -96,7 +97,7 @@ class VideoAgent:
         if not isinstance(value, dict) or set(value) - set(DEFAULTS):
             raise RpcError(-32602, 'INVALID_AUTOMATION_CONFIG')
         config = {**self.config, **value}
-        if config['discovery_source'] not in ('popular_first', 'search'):
+        if config['discovery_source'] not in ('popular_first', 'home_feed_first', 'search'):
             raise RpcError(-32602, 'INVALID_AUTOMATION_CONFIG')
         for key in ('dm_auto_start', 'scheduled', 'request_enabled', 'actions_enabled', 'proactive_enabled', 'share_cards', 'comments_enabled', 'mentions_enabled'):
             if type(config[key]) is not bool:
@@ -184,11 +185,11 @@ class VideoAgent:
             for index in range(self.config['rounds']):
                 if minute < start + (end - start) * index // self.config['rounds']:
                     continue
-                popular = self.config['discovery_source'] == 'popular_first'
+                feed_first = self.config['discovery_source'] in ('popular_first', 'home_feed_first')
                 requirements = json.dumps({'discovery_source': self.config['discovery_source'], 'popular_page': index + 1})
                 self.db.execute('''INSERT OR IGNORE INTO browse_jobs(account,event_key,kind,day,keyword,rounds,wanted,created,requirements)
                     VALUES(?,?,'scheduled',?,?,?,?,?,?)''', (self.dm.account, f'schedule:{now.date()}:{index}',
-                    str(now.date()), keywords[index % len(keywords)], 2 if popular else 1,
+                    str(now.date()), keywords[index % len(keywords)], 2 if feed_first else 1,
                     self.config['per_round'], time.time(), requirements))
 
     def request(self, peer: str, source_key: str, value: dict) -> dict:
@@ -262,7 +263,8 @@ class VideoAgent:
             return
         scheduled = job['kind'] == 'scheduled'
         requirements = json.loads(job['requirements'])
-        popular_first = scheduled and requirements.get('discovery_source') == 'popular_first'
+        source = requirements.get('discovery_source')
+        feed_first = scheduled and source in ('popular_first', 'home_feed_first')
         if scheduled:
             collected = self.db.execute('SELECT COUNT(*) FROM browse_items WHERE job_id=? AND video_id IS NOT NULL', (job['id'],)).fetchone()[0]
             if collected >= job['wanted']:
@@ -270,13 +272,16 @@ class VideoAgent:
                     self.db.execute("UPDATE browse_jobs SET state='waiting',round_index=rounds WHERE id=?", (job['id'],))
                 return
         if job['candidates'] is None:
-            if popular_first and job['round_index'] == 0:
-                self.step('优先获取 B 站热门视频', str(job['id']))
-                found = await self.platform.request('popular', {'page': requirements['popular_page'], 'limit': 20})
+            if feed_first and job['round_index'] == 0:
+                self.step('优先获取 B 站首页推荐' if source == 'home_feed_first' else '优先获取 B 站热门视频', str(job['id']))
+                if source == 'home_feed_first':
+                    found = await self.platform.request('home_feed', {'limit': 20})
+                else:
+                    found = await self.platform.request('popular', {'page': requirements['popular_page'], 'limit': 20})
             else:
-                self.step('热门可用视频不足，按兴趣搜索补充' if popular_first else f"搜索第 {job['round_index'] + 1} 轮候选视频", str(job['id']))
+                self.step('推荐流可用视频不足，按兴趣搜索补充' if feed_first else f"搜索第 {job['round_index'] + 1} 轮候选视频", str(job['id']))
                 found = await self.platform.request('search', {'keyword': job['keyword'],
-                    'page': 1 if popular_first else job['round_index'] + 1, 'limit': 20})
+                    'page': 1 if feed_first else job['round_index'] + 1, 'limit': 20})
             profile = self.runner.memory.profile()
             blocked = {row[0] for row in self.db.execute("SELECT bvid FROM video_actions WHERE account=? AND action='dislike'", (self.dm.account,))}
             seen = {row[0] for row in self.db.execute('SELECT bvid FROM browse_items WHERE job_id=?', (job['id'],))}
@@ -303,13 +308,46 @@ class VideoAgent:
         try:
             self.step('获取视频字幕', candidate['bvid'])
             cached = self.db.execute("SELECT document FROM videos WHERE bvid=? AND state='done' ORDER BY id LIMIT 1", (candidate['bvid'],)).fetchone() if job['kind'] == 'request' else None
-            document = json.loads(cached[0]) if cached else await self.platform.request('fetch', {'bvid': candidate['bvid'], 'page': 1})
+            try:
+                document = json.loads(cached[0]) if cached else await self.platform.request('fetch', {'bvid': candidate['bvid'], 'page': 1})
+            except RpcError as exc:
+                if str(exc) not in ('NO_SUBTITLE_OR_LOGIN_REQUIRED', 'NO_SUBTITLE_URL') or not self.media:
+                    raise
+                self.step('字幕不可用，尝试下载音频并在本地转写', candidate['bvid'])
+                metadata = await self.platform.request('audio', {'bvid': candidate['bvid'], 'page': 1})
+                duration = metadata.get('duration')
+                if type(duration) not in (int, float) or not math.isfinite(duration) or duration <= 0:
+                    raise RpcError(-32030, 'AUDIO_DURATION_LIMIT')
+                if scheduled and duration > self.config['max_video_seconds']:
+                    raise RpcError(-32030, 'VIDEO_EXCEEDS_AUTOMATION_DURATION')
+                if not scheduled and not self.social.can_recommend(job['peer'], metadata, requirements.get('max_seconds')):
+                    raise RpcError(-32030, 'VIDEO_EXCLUDED_BY_PREFERENCES')
+                media_job = self.media.start({'bvid': candidate['bvid'], 'page': 1, 'mode': 'audio', 'transcribe': True},
+                                             metadata=metadata, priority=0 if not scheduled else 10)
+                try:
+                    await asyncio.shield(self.media.task)
+                except asyncio.CancelledError:
+                    if self.media.task.cancelled():
+                        raise RpcError(-32030, 'MEDIA_CANCELLED') from None
+                    self.media.task.cancel()
+                    await asyncio.gather(self.media.task, return_exceptions=True)
+                    raise
+                media_result = self.media.status(media_job['job_id'])
+                if media_result['state'] != 'done' or not media_result['result'].get('summary_task'):
+                    raise RpcError(-32030, media_result['error'] or 'ASR_FAILED')
+                key = media_result['result']['summary_task']['id']
+                row = self.db.execute('SELECT document FROM videos WHERE id=?', (key,)).fetchone()
+                if row is None:
+                    raise RpcError(-32030, 'ASR_SUMMARY_TASK_MISSING')
+                document = json.loads(row[0])
+                self.store.event('browse', '音频转写已加入视频分析队列', candidate['bvid'])
             if job['kind'] == 'scheduled' and document['duration'] > self.config['max_video_seconds']:
                 error = 'VIDEO_EXCEEDS_AUTOMATION_DURATION'
-            elif job['kind'] == 'request' and not self.social.can_recommend(job['peer'], document, json.loads(job['requirements']).get('max_seconds')):
+            elif job['kind'] == 'request' and key is None and not self.social.can_recommend(job['peer'], document, requirements.get('max_seconds')):
                 error = 'VIDEO_EXCLUDED_BY_PREFERENCES'
             else:
-                key = self.runner.enqueue(document, source=document.get('source', 'bilibili_subtitles'), priority=0 if job['kind'] == 'request' else 10)['id']
+                if key is None:
+                    key = self.runner.enqueue(document, source=document.get('source', 'bilibili_subtitles'), priority=0 if job['kind'] == 'request' else 10)['id']
                 if cached:
                     self.store.event('request', '已复用保存的视频总结', candidate['bvid'])
         except RpcError as exc:
@@ -375,7 +413,7 @@ class VideoAgent:
             system = self.runner.memory.persona_system() + (
                 '\n根据已分析的视频和人设选择行为，不需要每个视频都操作。只输出JSON：'
                 '{"rating":"值得看","like":false,"dislike":false,"favorite":false,"reason":"不超过300字理由","evidence":[原始字幕整数ID],'
-                '"recommendations":[{"peer_uid":"输入好友UID","reason":"1至180字具体推荐理由","share":false}]}。'
+                '"recommendations":[{"peer_uid":"输入好友UID","reason":"1至60字具体推荐理由","share":false}]}。'
                 'like表示非常喜欢；favorite表示有反复学习或观看价值；dislike表示以后不想再推荐，不能与like或favorite同时为true。'
                 'rating必须从值得看、可以看、没必要看三者中选一个。值得看：对角色有明确价值且论据、内容质量较好；可以看：有可取内容但一般或只适合特定需求；没必要看：重复、价值低或明显不匹配。'
                 '只允许推荐值得看的视频，且要匹配好友兴趣，最多3名好友；特别值得直接转发时share=true。没有合适好友时列表为空。'
@@ -423,7 +461,7 @@ class VideoAgent:
                 friend = self.social.profile(recommendation['peer_uid'])
                 if friend and friend['recommend'] and friend['peer'] in self.dm.allowed_peers and self.social.can_recommend(friend['peer'], result):
                     self.social.recommend(friend['peer'], row['id'], result, recommendation['reason'],
-                                          recommendation['share'] and self.config['share_cards'])
+                                          False)
 
     @staticmethod
     def validate_recommendations(value, allowed: set, key: str, maximum: int) -> None:

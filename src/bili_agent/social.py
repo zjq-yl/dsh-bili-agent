@@ -304,7 +304,14 @@ class Social:
                 'recommendations': [dict(row) for row in deliveries], 'error': self.error,
                 'feedback': [dict(row) for row in self.db.execute('SELECT peer,bvid,kind,created FROM recommendation_feedback WHERE account=? ORDER BY created DESC LIMIT 30', (account,))],
                 'state': 'RUNNING' if self.task and not self.task.done() else 'STOPPED',
-                'matching': 'model_persona_and_friend' if self.model_driven else 'explicit_interest_keywords', 'format': 'reason_summary_link'}
+                'matching': 'model_persona_and_friend' if self.model_driven else 'explicit_interest_keywords', 'format': 'short_reason_link'}
+
+    @staticmethod
+    def proactive_body(result: dict, reason: str) -> str:
+        """Keep unsolicited recommendations to one reason and a final video link."""
+        short_reason = reason.strip()[:68].rstrip('，。； ') + '。'
+        link = f"https://www.bilibili.com/video/{result['bvid']}/?p={result.get('page', 1)}"
+        return f"刚刷到《{result['title'][:35]}》，{short_reason}\n{link}"
 
     def recommend(self, peer: str, video_id: int, result: dict, reason: str, share: bool = False,
                   request_id: int | None = None) -> str:
@@ -313,25 +320,12 @@ class Social:
         previous = self.previous_recommendation(peer, result['bvid'])
         if previous:
             return previous['id']
-        point = (result.get('evidence') or [None])[0]
-        evidence = ''
-        if point:
-            seconds = max(0, int(point['from']))
-            evidence = f"\n内容依据 {seconds // 60}:{seconds % 60:02d}：{point['content'][:50]}\nhttps://www.bilibili.com/video/{result['bvid']}/?p={result.get('page', 1)}&t={seconds}"
-        analysis = result.get('analysis') or {}
-        prefix = f"推荐给你：{result['title'][:60]}\n为什么适合你：{reason[:160]}\n\n视频总结："
-        suffix = f"\n\nhttps://www.bilibili.com/video/{result['bvid']}/?p={result.get('page', 1)}{evidence}\n可回复反馈：太基础、太难、太长、不感兴趣（多条推荐请附BV号）。"
-        available = 800 - len(prefix) - len(suffix)
-        excerpt = result['summary']
-        if analysis:
-            sections = []
-            for label, field, fraction in [('结论', 'conclusion', .4), ('依据', 'reasoning', .35), ('局限', 'caveats', .25)]:
-                budget = max(1, int((available - 11) * fraction))
-                value = analysis[field]
-                sections.append(f"{label}：" + (value if len(value) <= budget else value[:budget-1] + '…'))
-            excerpt = '\n'.join(sections)
-        excerpt = excerpt if len(excerpt) <= available else excerpt[:available-1] + '…'
-        body = prefix + excerpt + suffix
+        link = f"https://www.bilibili.com/video/{result['bvid']}/?p={result.get('page', 1)}"
+        if request_id is None:
+            # Proactive pushes are sent as each browsed video finishes, so keep the DM conversational.
+            body = self.proactive_body(result, reason)
+        else:
+            body = f"找到一个适合你这次点播的视频：《{result['title'][:60]}》。{reason[:160]}\n视频总结：{result['summary'][:400]}\n{link}"
         if request_id is not None:
             draft_id = self.messaging.compose(peer, body, f"req-{request_id}-{video_id}-{peer}")['id']
             with self.db:
@@ -352,7 +346,7 @@ class Social:
         if share:
             self.messaging.compose_card(peer, result['bvid'], draft_id, f"card-{result['bvid']}-{peer}")
         if not existing or not existing['draft_id']:
-            self.messaging.store.event('recommendation', '已生成推荐理由、摘要和视频链接', result['bvid'])
+            self.messaging.store.event('recommendation', '已生成简短推荐和视频链接', result['bvid'])
         self.wake.set()
         return draft_id
 
@@ -411,8 +405,7 @@ class Social:
             reason, draft_id = '兴趣未匹配或没有正面感受', None
             if row['valence'] > 0 and matches and self.can_recommend(row['peer'], result):
                 reason = '这段内容提到了你感兴趣的' + '、'.join(matches[:3]) + '，觉得你可能会喜欢。'
-                summary = result['summary'][:400] + ('…' if len(result['summary']) > 400 else '')
-                body = f"推荐给你：{result['title'][:80]}\n{reason}\n\n内容摘记：{summary}\n\nhttps://www.bilibili.com/video/{row['bvid']}/"
+                body = f"刚刷到《{result['title'][:35]}》，{reason[:68]}\nhttps://www.bilibili.com/video/{row['bvid']}/"
                 draft = self.messaging.compose(row['peer'], body, f"rec-{row['bvid']}-{row['peer']}")
                 draft_id = draft['id']
                 with self.db:
@@ -430,9 +423,13 @@ class Social:
             return
         if self.messaging.delivery_window()['reason']:
             return
-        if await self.send_proactive_card():
-            return
-        pending = self.db.execute("""SELECT o.id,o.peer,r.bvid FROM recommendations r
+        # Older queued cards belong to the former long-form format; leave only the text link.
+        with self.db:
+            self.db.execute("""UPDATE dm_outbox SET state='cancelled',error='PROACTIVE_LINK_ONLY'
+                WHERE account=? AND state='draft' AND card_bvid IS NOT NULL
+                AND depends_on IN (SELECT draft_id FROM recommendations WHERE account=?)""",
+                (self.messaging.account, self.messaging.account))
+        pending = self.db.execute("""SELECT o.id,o.peer,r.bvid,r.reason FROM recommendations r
             JOIN dm_outbox o ON o.id=r.draft_id JOIN friends f ON f.account=r.account AND f.peer=r.peer
             WHERE r.account=? AND f.recommend=1 AND f.auto_send=1 AND o.state='draft'
             ORDER BY r.created LIMIT 20""", (self.messaging.account,)).fetchall()
@@ -442,45 +439,21 @@ class Social:
             if self.delivery_status(row['peer'])['reason']:
                 continue
             video = self.db.execute("SELECT result FROM videos WHERE bvid=? AND state='done' LIMIT 1", (row['bvid'],)).fetchone()
-            if video and not self.matches(row['peer'], json.loads(video[0])):
+            document = json.loads(video[0]) if video else None
+            if document and not self.matches(row['peer'], document):
                 continue
             if self.model_driven:
                 decision = self.db.execute('SELECT value FROM video_decisions WHERE account=? AND bvid=?', (self.messaging.account, row['bvid'])).fetchone()
                 if not decision or json.loads(decision[0]).get('rating') != '值得看':
                     continue
+            if document:
+                with self.db:
+                    self.db.execute("UPDATE dm_outbox SET text=? WHERE id=? AND state='draft' AND text LIKE '推荐给你：%'",
+                                    (self.proactive_body(document, row['reason']), row['id']))
             result = await self.messaging.publish(row['id'])
             if result['state'] == 'uncertain':
                 raise RpcError(-32040, 'DM_SEND_UNCERTAIN')
             break  # One automatic recommendation per tick; normal DM quotas still apply.
-
-    async def send_proactive_card(self) -> bool:
-        """Video Agent delivers only cards attached to its proactive recommendations."""
-        if not self.share_cards:
-            return False
-        rows = self.db.execute('''SELECT o.* FROM dm_outbox o JOIN recommendations r ON r.draft_id=o.depends_on
-            JOIN dm_outbox parent ON parent.id=o.depends_on
-            WHERE r.account=? AND o.state='draft' AND o.card_bvid IS NOT NULL AND parent.state='sent'
-            ORDER BY o.created LIMIT 20''', (self.messaging.account,)).fetchall()
-        for row in rows:
-            friend = self.profile(row['peer'])
-            if not friend or not friend['recommend'] or not friend['auto_send'] or row['peer'] not in self.messaging.allowed_peers:
-                continue
-            decision = self.db.execute('SELECT value FROM video_decisions WHERE account=? AND bvid=?', (self.messaging.account, row['card_bvid'])).fetchone()
-            if not decision or json.loads(decision[0]).get('rating') != '值得看':
-                continue
-            source = self.db.execute("SELECT result FROM videos WHERE bvid=? AND state='done' LIMIT 1", (row['card_bvid'],)).fetchone()
-            if not source or not self.matches(row['peer'], json.loads(source[0])):
-                continue
-            try:
-                self.guard_delivery(row)
-            except RpcError as exc:
-                if str(exc) == 'RECOMMENDATION_CARD_EXPIRED':
-                    with self.db:
-                        self.db.execute("UPDATE dm_outbox SET state='cancelled',error=? WHERE id=?", (str(exc), row['id']))
-                continue
-            await self.messaging.publish(row['id'])
-            return True
-        return False
 
     async def run(self):
         while True:

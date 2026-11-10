@@ -95,9 +95,10 @@ class SocialTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row['peer'] for row in result], ['22'])
         draft = self.dm.status()['outbox'][0]
         self.assertIn('知识', draft['text'])
-        self.assertIn('内容摘记', draft['text'])
+        self.assertTrue(draft['text'].startswith('刚刷到'))
         self.assertIn('https://www.bilibili.com/video/', draft['text'])
-        self.assertLessEqual(len(draft['text']), 800)
+        self.assertLessEqual(len(draft['text']), 160)
+        self.assertTrue(draft['text'].splitlines()[-1].startswith('https://www.bilibili.com/video/'))
         self.assertEqual(self.platform.sent, [])
         self.social = Social(self.store, self.dm)
         await self.video('2')
@@ -217,16 +218,30 @@ class SocialTests(unittest.IsolatedAsyncioTestCase):
         self.social.handle_message('22', '恢复推荐')
         self.assertIsNone(self.social.delivery_status('22')['reason'])
 
-    async def test_recommendation_contains_verified_timestamp_and_respects_message_length(self):
+    async def test_proactive_recommendation_is_short_and_link_is_last(self):
         self.friend()
         key = await self.video()
         result = self.runner.result(key)['result']
         result.update(title='题' * 300, summary='摘' * 1500)
         draft_id = self.social.recommend('22', key, result, '理' * 180)
         body = self.store.db.execute('SELECT text FROM dm_outbox WHERE id=?', (draft_id,)).fetchone()[0]
-        self.assertLessEqual(len(body), 800)
-        self.assertIn('内容依据', body)
-        self.assertIn('&t=', body)
+        self.assertLessEqual(len(body), 160)
+        self.assertNotIn('视频总结', body)
+        self.assertTrue(body.splitlines()[-1].startswith('https://www.bilibili.com/video/'))
+
+    async def test_old_unsent_proactive_draft_is_shortened_and_card_cancelled(self):
+        self.friend(auto_send=True)
+        key = await self.video()
+        result = self.runner.result(key)['result']
+        draft_id = self.social.recommend('22', key, result, '适合你学习。', share=True)
+        with self.store.db:
+            self.store.db.execute("UPDATE dm_outbox SET text='推荐给你：旧版长摘要' WHERE id=?", (draft_id,))
+        with patch('bili_agent.messaging.MIN_SEND_INTERVAL', 0):
+            await self.social.tick()
+        self.assertEqual(len(self.platform.sent), 1)
+        self.assertTrue(self.platform.sent[0]['text'].splitlines()[-1].startswith('https://www.bilibili.com/video/'))
+        self.assertNotIn('旧版长摘要', self.platform.sent[0]['text'])
+        self.assertEqual(self.store.db.execute('SELECT state FROM dm_outbox WHERE depends_on=?', (draft_id,)).fetchone()[0], 'cancelled')
 
     async def test_block_author_uses_verified_uid(self):
         self.friend(auto_send=True)

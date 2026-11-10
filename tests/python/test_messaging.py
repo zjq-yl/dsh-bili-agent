@@ -88,6 +88,97 @@ class MessagingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.platform.sent[0]['peer_uid'], '22')
         self.assertEqual(self.dm.history('22')[-1]['direction'], 'outgoing')
 
+    async def test_split_reply_waits_for_previous_receipt_and_stops_after_uncertain_send(self):
+        async def short_reply(purpose, system, payload):
+            return json.dumps({'reply': '你好啊，今天刚看了一个视频。'})
+        self.model.generate = short_reply
+        self.dm.ingest('22', [message(text='你好啊')])
+        first = await self.dm.draft_reply('101')
+        rows = self.store.db.execute("SELECT * FROM dm_outbox ORDER BY created").fetchall()
+        self.assertEqual([row['text'] for row in rows], ['你好啊', '今天刚看了一个视频。'])
+        self.assertEqual(rows[1]['depends_on'], first['id'])
+        with self.assertRaisesRegex(RpcError, 'PREVIOUS_MESSAGE_NOT_SENT'):
+            await self.dm.publish(rows[1]['id'])
+        self.platform.fail_send = True
+        self.assertEqual((await self.dm.publish(first['id']))['state'], 'uncertain')
+        self.assertEqual(self.store.db.execute('SELECT state FROM dm_outbox WHERE id=?', (rows[1]['id'],)).fetchone()[0], 'cancelled')
+        self.assertEqual(len(self.platform.sent), 1)
+
+    async def test_split_reply_sends_two_messages_in_order_and_recovers_after_restart(self):
+        async def short_reply(purpose, system, payload):
+            return json.dumps({'reply': '你好啊，今天刚看了一个视频。'})
+        self.model.generate = short_reply
+        self.dm.ingest('22', [message(text='你好啊')])
+        first = await self.dm.draft_reply('101')
+        with self.store.db:
+            self.store.db.execute("UPDATE dm_messages SET accepted=1 WHERE msg_key='101'")
+        self.dm.auto_send = True
+        with patch('bili_agent.messaging.MIN_SEND_INTERVAL', 0):
+            await self.dm.send_pending_reply()
+            self.assertEqual([sent['text'] for sent in self.platform.sent], ['你好啊'])
+            await self.dm.close()
+            self.dm = Messaging(self.store, self.platform, self.model, self.memory, True, ['22', '33'])
+            await self.dm.bind()
+            self.dm.auto_send = True
+            await self.dm.send_pending_reply()
+        self.assertEqual([sent['text'] for sent in self.platform.sent], ['你好啊', '今天刚看了一个视频。'])
+        self.assertEqual([row['state'] for row in self.store.db.execute('SELECT state FROM dm_outbox ORDER BY created')],
+                         ['sent', 'sent'])
+        self.assertEqual((await self.dm.draft_reply('101'))['id'], first['id'])
+
+    async def test_structured_chat_messages_send_separately_without_punctuation(self):
+        async def structured_reply(purpose, system, payload):
+            return json.dumps({'messages': ['你好呀', '刚看完一个挺有意思的视频']})
+        self.model.generate = structured_reply
+        self.dm.ingest('22', [message(text='你好啊，今天干嘛了')])
+        self.assertEqual(self.dm.status()['reply_format'], 'messages_v2')
+        await self.dm.draft_reply('101')
+        rows = self.store.db.execute('SELECT text FROM dm_outbox ORDER BY created').fetchall()
+        self.assertEqual([row['text'] for row in rows], ['你好呀', '刚看完一个挺有意思的视频'])
+        with self.store.db:
+            self.store.db.execute("UPDATE dm_messages SET accepted=1 WHERE msg_key='101'")
+        self.dm.auto_send = True
+        with patch('bili_agent.messaging.MIN_SEND_INTERVAL', 0):
+            await self.dm.send_pending_reply()
+            await self.dm.send_pending_reply()
+        self.assertEqual([item['text'] for item in self.platform.sent], ['你好呀', '刚看完一个挺有意思的视频'])
+
+    async def test_greeting_with_question_repairs_one_message_before_drafting(self):
+        calls = []
+        async def reply(purpose, system, payload):
+            calls.append(json.loads(payload))
+            return json.dumps({'messages': ['你好呀', '今天在整理视频笔记']}) if len(calls) == 2 else \
+                json.dumps({'messages': ['今天在整理视频笔记']})
+        self.model.generate = reply
+        self.dm.ingest('22', [message(text='你好啊，今天干嘛了')])
+        await self.dm.draft_reply('101')
+        self.assertEqual(len(calls), 2)
+        self.assertEqual([row['text'] for row in self.store.db.execute('SELECT text FROM dm_outbox ORDER BY created')],
+                         ['你好呀', '今天在整理视频笔记'])
+
+    async def test_restart_cancels_followups_after_uncertain_parent(self):
+        self.dm.ingest('22', [message(text='你好啊')])
+        self.dm.compose_reply_parts('22', '101', '你好啊，今天刚看了一个视频。')
+        with self.store.db:
+            self.store.db.execute("UPDATE dm_outbox SET state='sending' WHERE source_key='101'")
+        self.dm = Messaging(self.store, self.platform, self.model, self.memory, True, ['22', '33'])
+        states = [row['state'] for row in self.store.db.execute('SELECT state FROM dm_outbox ORDER BY created')]
+        self.assertEqual(states, ['uncertain', 'cancelled'])
+
+    async def test_long_term_memory_is_read_only_when_current_turn_needs_it(self):
+        reads = []
+        original = self.dm.private_memory
+        def tracked(peer):
+            reads.append(peer)
+            return original(peer)
+        self.dm.private_memory = tracked
+        self.dm.ingest('22', [message(text='你好啊')])
+        await self.dm.draft_reply('101')
+        self.assertEqual(reads, [])
+        self.dm.ingest('22', [message('102', text='你还记得我上次说的学习目标吗？')])
+        await self.dm.draft_reply('102')
+        self.assertEqual(reads, ['22'])
+
     async def test_custom_persona_is_used_for_dm_without_granting_send_permission(self):
         self.memory.configure({'name': '阿树', 'style': '简短', 'persona': '喜欢历史，说话温和。'})
         self.dm.send_enabled = False
@@ -181,7 +272,7 @@ class MessagingTests(unittest.IsolatedAsyncioTestCase):
             while not self.dm.status()['outbox']:
                 await asyncio.sleep(.005)
         await self.dm.close()
-        self.assertEqual(self.dm.status()['outbox'][0]['source_key'], '101')
+        self.assertTrue(any(row['source_key'] == '101' for row in self.dm.status()['outbox']))
         self.assertEqual(self.platform.sent, [])
 
     async def test_video_share_card_is_received_once_and_supplies_bvid_to_reply_context(self):
@@ -211,10 +302,10 @@ class MessagingTests(unittest.IsolatedAsyncioTestCase):
             for index in range(3):
                 self.platform.inbox.append(message(str(101 + index), age=0))
                 async with asyncio.timeout(2):
-                    while len(self.platform.sent) < index + 1:
+                    while len(self.platform.sent) < (index + 1) * 2:
                         await asyncio.sleep(.005)
             await asyncio.sleep(.03)
-            self.assertEqual(len(self.platform.sent), 3)
+            self.assertEqual(len(self.platform.sent), 6)
             self.assertEqual(len(self.model.calls), 3)
             self.assertTrue(self.dm.status()['auto_send'])
             await self.dm.close()
@@ -243,7 +334,7 @@ class MessagingTests(unittest.IsolatedAsyncioTestCase):
                     await asyncio.sleep(.005)
             status = self.dm.status()
             self.assertGreater(status['next_poll_at'], status['last_sync'])
-            self.assertEqual(status['incoming'][0]['reply_state'], 'sent')
+            self.assertEqual(status['incoming'][0]['reply_state'], 'draft')  # The second short message is still queued.
             log = json.dumps(status['logs'], ensure_ascii=False)
             for text in ('检查完成', '收到来自', '回复草稿已就绪', '私信已确认发送'):
                 self.assertIn(text, log)
@@ -286,7 +377,8 @@ class MessagingTests(unittest.IsolatedAsyncioTestCase):
                 while not self.platform.sent:
                     await asyncio.sleep(.005)
             await asyncio.sleep(.03)
-            self.assertEqual(len(self.platform.sent), 1)
+            self.assertEqual(len(self.platform.sent), 2)
+            self.assertEqual([item['text'] for item in self.platform.sent], ['我记下了', '你更喜欢哪种教程？'])
             self.assertEqual(self.model.calls[0][1]['reply_to']['msg_key'], '102')
             states = dict(self.store.db.execute('SELECT msg_key,state FROM dm_messages WHERE direction="incoming"'))
             self.assertEqual(states, {'100': 'new', '101': 'coalesced', '102': 'drafted'})

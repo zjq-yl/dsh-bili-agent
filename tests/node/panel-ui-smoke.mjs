@@ -10,7 +10,7 @@ const directory = await mkdtemp(join(tmpdir(), 'bili-ui-'))
 const state = {
   ready: true, version: 'test',
   agent: { state: 'ANALYZE', queue: [], activity: { message: '正在总结第 2 / 5 段', title: '测试视频：如何学习 Python', started: Date.now() / 1000 - 12 } },
-  messaging: { state: 'RUNNING', account_uid: '100', send_enabled: true, allowed_peers: ['200'], auto_send: true, outbox: [], delivery_window: { used: 4, limit: 20, reason: 'DM_SEND_INTERVAL', next_at: Date.now() / 1000 + 45 } },
+  messaging: { state: 'RUNNING', account_uid: '100', send_enabled: true, allowed_peers: ['200'], auto_send: true, reply_format: 'messages_v2', reply_dispatch: 'message_event', outbox: [], delivery_window: { used: 4, limit: 20, reason: 'DM_SEND_INTERVAL', next_at: Date.now() / 1000 + 45 } },
   social: { friends: [], recommendations: [] },
   automation: { config: { discovery_source: 'popular_first', max_video_seconds: 600, comments_enabled: true, comment_daily_limit: 3, share_cards: true, actions_enabled: true, dm_auto_start: true, request_enabled: true, favorite_folder: '', scheduled: true, proactive_enabled: true, start_time: '18:00', end_time: '21:00', rounds: 3, per_round: 5 }, slots: ['18:00', '19:00', '20:00'], assessments: [], actions: [], jobs: [{ id: 1, kind: 'request', peer: '200', keyword: 'Python 入门', state: 'waiting', wanted: 2, round_index: 1, rounds: 3, videos: [{ bvid: 'BV0000000001', state: 'analyzing', checkpoint: 2 }], deliveries: [] }], model_budget: { used: 45, limit: 120, reset_at: Date.now() / 1000 + 3600 } },
   events: [{ id: 1, created: Date.now() / 1000, category: 'analysis', reference: 'BV0000000001', message: '正在总结第 2 / 5 段' }],
@@ -189,10 +189,11 @@ try {
   assert.equal(await evaluate("document.getElementById('auto-start').value"), '09:00', 'live sync must not overwrite unsaved settings')
   await evaluate("document.getElementById('auto-end').value='08:00'; document.getElementById('auto-end').dispatchEvent(new Event('input'))")
   assert.equal(await evaluate("document.getElementById('automation-form').checkValidity()"), false)
-  await evaluate("document.querySelector('[data-start=\"14:00\"]').click(); document.getElementById('automation-form').requestSubmit()")
+  await evaluate("document.querySelector('[data-start=\"14:00\"]').click(); document.getElementById('auto-source').value='home_feed_first'; document.getElementById('automation-form').requestSubmit()")
   await until("document.getElementById('notice').textContent === '设置已保存。'")
   const saved = actions.find(action => action.method === 'automation.configure')
   assert.equal(saved?.params.config.start_time, '14:00'); assert.equal(saved?.params.config.end_time, '17:00')
+  assert.equal(saved?.params.config.discovery_source, 'home_feed_first')
   assert.equal(saved?.params.config.rounds, 3); assert.equal(saved?.params.config.per_round, 5)
   await evaluate("document.getElementById('auto-scheduled').click()")
   assert.match(await evaluate("document.getElementById('schedule-description').textContent"), /定时浏览已关闭/)

@@ -77,7 +77,8 @@ class Platform:
                 self.next_request = time.monotonic() + 3
             try:
                 async with asyncio.timeout(60):
-                    handlers = {"search": self.search, "popular": self.popular, "fetch": self.fetch, "audio": self.audio, 'metadata': self.metadata,
+                    handlers = {"search": self.search, "popular": self.popular, "home_feed": self.home_feed,
+                                "fetch": self.fetch, "audio": self.audio, 'metadata': self.metadata,
                                 "identity": self.identity, "sessions": self.sessions, "messages": self.messages,
                                 "send_dm": self.send_dm, "share_video": self.share_video, 'send_comment': self.send_comment,
                                 "video_action": self.video_action, "favorite_folders": self.favorite_folders,
@@ -399,6 +400,32 @@ class Platform:
             if len(items) == limit:
                 break
         return {'candidates': items, 'source': 'bilibili_popular', 'page': page}
+
+    async def home_feed(self, params: dict) -> dict:
+        """Read one bounded page of the signed-in account's homepage recommendations."""
+        limit = params.get('limit', 20)
+        if type(limit) is not int or not 1 <= limit <= 20:
+            raise RpcError(-32602, 'INVALID_SEARCH_PAGE')
+        from bilibili_api import homepage
+        data = await homepage.get_videos(credential=self.credential())
+        rows = data.get('item', []) if isinstance(data, dict) else []
+        if not isinstance(rows, list):
+            raise RpcError(-32010, 'INVALID_HOME_FEED')
+        items = []
+        for row in rows:
+            if not isinstance(row, dict) or row.get('goto') not in (None, 'av'):
+                continue
+            bvid = row.get('bvid')
+            if not isinstance(bvid, str) or not re.fullmatch(r'BV[0-9A-Za-z]{10}', bvid):
+                continue
+            owner = row.get('owner') if isinstance(row.get('owner'), dict) else {}
+            duration = row.get('duration', 0)
+            items.append({'bvid': bvid, 'title': str(row.get('title') or '')[:300],
+                          'author': str(owner.get('name') or '')[:100], 'author_uid': str(owner.get('mid') or ''),
+                          'duration': duration if type(duration) in (int, float) else 0})
+            if len(items) == limit:
+                break
+        return {'candidates': items, 'source': 'bilibili_home_feed'}
 
     async def search(self, params):
         keyword = params.get("keyword")

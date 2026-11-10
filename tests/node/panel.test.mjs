@@ -61,11 +61,13 @@ test('panel requires local authenticated same-origin actions and never exposes a
     assert.equal((await post('agent.pause')).status, 200)
     assert.equal((await post('friends.connect')).status, 200)
     assert.equal((await post('friends.connection')).status, 200)
-    for (const method of ['friends.directory', 'friends.lookup', 'friends.contact', 'friends.message']) {
+    for (const method of ['friends.directory', 'friends.lookup', 'friends.contact', 'friends.message',
+      'dm.memory', 'dm.forget', 'media.start', 'media.status', 'media.cancel']) {
       assert.equal((await post(method)).status, 200)
     }
     assert.deepEqual(calls.map(call => call.method), ['worker.health', 'agent.pause', 'friends.connect', 'friends.connection',
-      'friends.directory', 'friends.lookup', 'friends.contact', 'friends.message'])
+      'friends.directory', 'friends.lookup', 'friends.contact', 'friends.message',
+      'dm.memory', 'dm.forget', 'media.start', 'media.status', 'media.cancel'])
   } finally { await panel.close(); await assert.rejects(readFile(join(dir, 'panel.json')), { code: 'ENOENT' }); await rm(dir, { recursive: true, force: true }) }
 })
 

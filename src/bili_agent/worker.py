@@ -183,7 +183,7 @@ class Runtime:
             self.social = Social(self.store, self.messaging)
             self.social.model_driven = True
             self.messaging.friends = self.social
-            self.automation = VideoAgent(self.store, self.runner, self.messaging, self.social, self.platform, self.model, self.data_dir)
+            self.automation = VideoAgent(self.store, self.runner, self.messaging, self.social, self.platform, self.model, self.data_dir, self.media)
             self.social.proactive_enabled = self.automation.config['proactive_enabled']
             self.messaging.recommendations = self.automation
             self.runner.assessment = self.automation.assessment

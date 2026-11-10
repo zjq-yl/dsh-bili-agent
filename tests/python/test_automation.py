@@ -14,6 +14,7 @@ from bili_agent.runner import Runner
 from bili_agent.social import Social
 from bili_agent.store import Store
 from bili_agent.library import browse as browse_library, cover_url
+from bili_agent.media import Media
 from .test_agent import FakeModel as VideoModel, sample
 from .test_messaging import FakePlatform, message
 
@@ -322,6 +323,98 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.store.db.execute('SELECT error FROM browse_items WHERE bvid=?', ('BV0000000009',)).fetchone()[0],
                          'NO_SUBTITLE_OR_LOGIN_REQUIRED')
 
+    async def test_home_feed_skips_saved_videos_and_searches_for_remaining_target(self):
+        self.auto.configure({'discovery_source': 'home_feed_first', 'scheduled': True,
+                             'start_time': '00:00', 'end_time': '23:59', 'rounds': 1, 'per_round': 2})
+        self.auto.schedule(datetime.now(BEIJING).replace(hour=12))
+        saved = {**sample(), 'bvid': 'BV0000000009', 'cid': '9000000009'}
+        self.runner.enqueue(saved)
+        original = self.platform.request
+
+        async def request(operation, params):
+            if operation == 'home_feed':
+                return {'candidates': [
+                    {'bvid': 'BV0000000009', 'title': '已经分析', 'duration': 100},
+                    {'bvid': 'BV0000000010', 'title': '新推荐', 'duration': 100}]}
+            return await original(operation, params)
+
+        self.platform.request = AsyncMock(side_effect=request)
+        with patch.object(self.auto, 'job_allowed', return_value=True), patch.object(self.runner, 'start'):
+            for _ in range(10):
+                job = self.store.db.execute('SELECT * FROM browse_jobs').fetchone()
+                if job['state'] == 'waiting':
+                    break
+                await self.auto.browse(job)
+        selected = {row[0] for row in self.store.db.execute('SELECT bvid FROM browse_items WHERE video_id IS NOT NULL')}
+        self.assertEqual(selected, {'BV0000000010', 'BV0000000001'})
+        self.assertEqual(len(self.platform.searches), 1)
+        self.assertEqual(self.platform.request.call_args_list[0].args, ('home_feed', {'limit': 20}))
+
+    async def test_automatic_browsing_transcribes_missing_subtitles_once(self):
+        self.auto.configure({'scheduled': True, 'start_time': '00:00', 'end_time': '23:59',
+                             'rounds': 1, 'per_round': 1})
+        self.auto.schedule(datetime.now(BEIJING).replace(hour=12))
+        model_dir = self.directory / 'asr-model'
+        model_dir.mkdir()
+        (model_dir / 'model.bin').write_bytes(b'fixture')
+        media = Media(self.store, self.platform, self.runner, self.directory, str(model_dir))
+        media.transcribe = AsyncMock(return_value=sample()['subtitles'])
+        self.auto.media = media
+        original = self.platform.request
+        metadata = {**sample(), 'bvid': 'BV0000000009', 'page': 1,
+                    'url': 'https://x.bilivideo.com/audio.m4s', 'track_id': '1'}
+
+        async def request(operation, params):
+            if operation == 'popular':
+                return {'candidates': [{'bvid': metadata['bvid'], 'title': metadata['title'], 'duration': 100}]}
+            if operation == 'fetch':
+                raise RpcError(-32010, 'NO_SUBTITLE_OR_LOGIN_REQUIRED')
+            if operation == 'audio':
+                return metadata
+            return await original(operation, params)
+
+        self.platform.request = AsyncMock(side_effect=request)
+        with patch.object(self.auto, 'job_allowed', return_value=True), patch.object(self.runner, 'start'), \
+                patch('bili_agent.media.importlib.util.find_spec', return_value=True), \
+                patch('bili_agent.media.download_audio', AsyncMock(return_value={
+                    'path': 'fixture', 'bytes': 100, 'sha256': 'fixture'})):
+            for _ in range(3):
+                job = self.store.db.execute('SELECT * FROM browse_jobs').fetchone()
+                await self.auto.browse(job)
+        video = self.store.db.execute('SELECT * FROM videos WHERE bvid=?', (metadata['bvid'],)).fetchone()
+        self.assertEqual(json.loads(video['document'])['source'], 'audio_asr')
+        self.assertEqual(self.store.db.execute('SELECT COUNT(*) FROM videos').fetchone()[0], 1)
+        self.assertEqual(self.store.db.execute('SELECT video_id FROM browse_items').fetchone()[0], video['id'])
+        self.assertEqual(len([c for c in self.platform.request.call_args_list if c.args[0] == 'audio']), 1)
+        self.assertEqual(media.status(self.store.db.execute('SELECT id FROM media_jobs').fetchone()[0])['state'], 'done')
+
+    async def test_automatic_browsing_checks_audio_duration_before_download(self):
+        self.auto.configure({'scheduled': True, 'start_time': '00:00', 'end_time': '23:59',
+                             'rounds': 1, 'per_round': 1})
+        self.auto.schedule(datetime.now(BEIJING).replace(hour=12))
+        media = Media(self.store, self.platform, self.runner, self.directory)
+        self.auto.media = media
+        original = self.platform.request
+
+        async def request(operation, params):
+            if operation == 'popular':
+                return {'candidates': [{'bvid': 'BV0000000009', 'title': '短视频', 'duration': 100}]}
+            if operation == 'fetch':
+                raise RpcError(-32010, 'NO_SUBTITLE_OR_LOGIN_REQUIRED')
+            if operation == 'audio':
+                return {**sample(), 'duration': 601}
+            return await original(operation, params)
+
+        self.platform.request = AsyncMock(side_effect=request)
+        with patch.object(self.auto, 'job_allowed', return_value=True):
+            for _ in range(2):
+                job = self.store.db.execute('SELECT * FROM browse_jobs').fetchone()
+                await self.auto.browse(job)
+        self.assertEqual(self.store.db.execute('SELECT COUNT(*) FROM media_jobs').fetchone()[0], 0)
+        self.assertEqual(self.store.db.execute('SELECT COUNT(*) FROM videos').fetchone()[0], 0)
+        self.assertEqual(self.store.db.execute('SELECT error FROM browse_items').fetchone()[0],
+                         'VIDEO_EXCEEDS_AUTOMATION_DURATION')
+
     async def test_only_worthwhile_videos_are_proactively_recommended_and_replay_is_idempotent(self):
         self.friend()
         row = await self.video()
@@ -331,7 +424,7 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         self.auto.interaction.prepare_results()
         self.assertEqual(self.auto.assessment(row['id'])['rating'], '值得看')
         self.assertEqual(len(self.social.status()['recommendations']), 1)
-        self.assertEqual(len(self.dm.status()['outbox']), 2)
+        self.assertEqual(len(self.dm.status()['outbox']), 1)
         self.assertEqual(self.platform.sent, [])
         self.assertEqual(self.platform.cards, [])
         # A different BV in the middle tier gets a summary but no recommendation.
@@ -345,7 +438,7 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.social.status()['recommendations']), 1)
         self.assertEqual(self.auto.assessment(key)['rating'], '可以看')
 
-    async def test_reason_precedes_card_and_uncertain_sends_are_not_repeated(self):
+    async def test_proactive_link_only_and_uncertain_sends_are_not_repeated(self):
         self.friend()
         row = await self.video()
         await self.auto.review(row)
@@ -357,7 +450,7 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
             await self.social.tick()
             await self.social.tick()
         self.assertEqual(len(self.platform.sent), 1)
-        self.assertEqual(len(self.platform.cards), 1)
+        self.assertEqual(len(self.platform.cards), 0)
         self.assertIn('https://www.bilibili.com/video/', self.platform.sent[0]['text'])
         await self.auto.interaction.perform_action()
         self.assertEqual(len(self.platform.actions), 1)

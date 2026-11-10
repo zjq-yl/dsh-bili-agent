@@ -84,7 +84,8 @@ class Media:
             WHERE state IN ('queued','fetching','downloading','transcribing');
         """)
 
-    def start(self, params):
+    def start(self, params, *, metadata=None, priority=10):
+        """Start a media job; trusted callers may reuse fetched metadata and set queue priority."""
         if self.task and not self.task.done():
             raise RpcError(-32002, 'MEDIA_BUSY')
         if (not isinstance(params.get('bvid'), str) or not re.fullmatch(r'BV[0-9A-Za-z]{10}', params['bvid'])
@@ -100,7 +101,7 @@ class Media:
         job_id = uuid.uuid4().hex
         with self.store.db:
             self.store.db.execute("INSERT INTO media_jobs(id,state) VALUES(?,'queued')", (job_id,))
-        self.task = asyncio.create_task(self.run(job_id, params.copy()))
+        self.task = asyncio.create_task(self.run(job_id, params.copy(), metadata, priority))
         return {"job_id": job_id, "state": "queued"}
 
     def status(self, job_id):
@@ -116,7 +117,7 @@ class Media:
             self.store.db.execute('UPDATE media_jobs SET state=?,result=?,error=? WHERE id=?',
                                   (state, json.dumps(result, ensure_ascii=False), error, job_id))
 
-    async def run(self, job_id, params):
+    async def run(self, job_id, params, metadata=None, priority=10):
         result = {}
         try:
             self.update(job_id, 'fetching', result)
@@ -125,7 +126,7 @@ class Media:
             if mode != 'audio':
                 try:
                     transcript = await self.platform.request('fetch', params)
-                    result['summary_task'] = self.runner.enqueue(transcript, source='bilibili_subtitles')
+                    result['summary_task'] = self.runner.enqueue(transcript, source='bilibili_subtitles', priority=priority)
                 except RpcError as exc:
                     if str(exc) not in ('NO_SUBTITLE_OR_LOGIN_REQUIRED', 'NO_SUBTITLE_URL'):
                         raise
@@ -135,7 +136,7 @@ class Media:
                 return
             if mode == 'auto' and not params.get('transcribe'):
                 raise RpcError(-32030, 'NO_SUBTITLE_ASR_DISABLED')
-            metadata = await self.platform.request('audio', params)
+            metadata = metadata if metadata is not None else await self.platform.request('audio', params)
             duration = metadata.get('duration')
             if (type(duration) not in (int, float) or not math.isfinite(duration) or not 0 < duration <= 21600
                     or (params.get('transcribe') and duration > 3600)):
@@ -157,7 +158,7 @@ class Media:
                 result['transcript_segments'] = len(value['subtitles'])
                 result['transcript'] = {'path': str(self.directory / f'{job_id}.json'), 'source': 'audio_asr'}
                 if transcript is None:
-                    result['summary_task'] = self.runner.enqueue(value, source='audio_asr')
+                    result['summary_task'] = self.runner.enqueue(value, source='audio_asr', priority=priority)
                 else:
                     result['summary_basis'] = 'bilibili_subtitles'
                     result['asr_note'] = '已保存音频转写，已有字幕总结不自动覆盖'

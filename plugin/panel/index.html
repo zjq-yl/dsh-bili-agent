@@ -25,15 +25,16 @@
     <div class="sidebar-note">本地运行 · DSH<small>关闭页面不影响后台任务</small></div>
   </aside>
   <main>
-    <header><div><p class="breadcrumb">工作台 <span aria-hidden="true">/</span> <span id="page-label">概览</span></p><h1 id="page-title">运行概览</h1><p class="subtle" id="page-description">账号状态、今日计划与处理进度。</p></div><div class="header-tools"><span id="connection" class="badge neutral">连接中</span><button id="refresh" class="secondary">刷新</button></div></header>
+    <header><div><p class="breadcrumb">小黎的工作台 <span aria-hidden="true">/</span> <span id="page-label">概览</span></p><h1 id="page-title">运行概览</h1><p class="subtle" id="page-description">账号状态、今日计划与处理进度。</p></div><div class="header-tools"><span id="connection" class="badge neutral">连接中</span><button id="refresh" class="secondary" type="button" aria-label="刷新面板状态"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 1-2.3-5.7M20 4v6h-6"/></svg><span>刷新</span></button></div></header>
     <div id="connection-alert" class="connection-alert" role="status" hidden><span>正在重新连接，当前内容可能不是最新状态。</span><button id="retry-connection" type="button" class="secondary">重新连接</button></div>
     <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
     <section id="overview">
-      <div class="workspace-intro"><div><p class="eyebrow">我的工作空间</p></div><span id="workspace-date" class="subtle"></span></div>
+      <div class="workspace-intro"><div><p class="eyebrow">TODAY / 今日控制台</p><p class="workspace-kicker">从发现到理解，看看小黎此刻的进度。</p></div><span id="workspace-date" class="subtle"></span></div>
       <div class="welcome-card">
-        <div class="welcome-copy"><p class="eyebrow">HELLO, BILIBILI</p><h2>今天，也发现一点新喜欢。</h2><p>把浏览交给小黎，把值得看的内容留给你。</p><div class="welcome-actions"><a class="primary-link" href="#videos" data-focus="video-input">＋ 添加视频</a><a class="welcome-secondary" href="#videos">查看视频历史 →</a></div></div>
-        <div class="welcome-tv" aria-hidden="true"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="m15 4 7 8m11-8-7 8"/><rect x="5" y="13" width="38" height="27" rx="7"/><path d="m14 23 5 2m15-2-5 2M20 31l4 3 4-3M13 40v3m22-3v3"/></svg><span>干杯，今天的好内容！</span></div>
+        <div class="welcome-copy"><p class="eyebrow"><span class="hero-signal" aria-hidden="true"></span> BILIBILI / AUTONOMOUS EXPLORER</p><h2>今天，也发现一点<br><em>新喜欢。</em></h2><p>从字幕和声音里理解视频，让每一次浏览都留下值得回看的发现。</p><div class="welcome-actions"><a class="primary-link" href="#videos" data-focus="video-input">＋ 添加视频 <span aria-hidden="true">↗</span></a><a class="welcome-secondary" href="#videos">查看视频历史 →</a></div></div>
+        <div class="welcome-scene" aria-hidden="true"><div class="scene-orbit orbit-one"></div><div class="scene-orbit orbit-two"></div><div class="scene-spark spark-one">✦</div><div class="scene-spark spark-two">✧</div><div class="welcome-tv"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="m15 4 7 8m11-8-7 8"/><rect x="5" y="13" width="38" height="27" rx="7"/><path d="m14 23 5 2m15-2-5 2M20 31l4 3 4-3M13 40v3m22-3v3"/></svg><span id="hero-activity">等待连接</span></div><div class="scene-caption">DISCOVER · UNDERSTAND · REMEMBER</div></div>
       </div>
+      <div class="pulse-strip" aria-label="工作台实时摘要"><div class="pulse-intro"><span class="pulse-icon">◉</span><span>实时脉搏<small>LIVE SNAPSHOT</small></span></div><div class="pulse-metric"><span>视频任务</span><strong id="pulse-videos">—</strong></div><div class="pulse-metric"><span>已完成</span><strong id="pulse-complete">—</strong></div><div class="pulse-metric"><span>近期动态</span><strong id="pulse-events">—</strong></div><a href="#logs" class="inline-route pulse-link">查看记录 ↗</a></div>
       <div id="agent-status" class="agent-grid">
         <article class="agent-card"><div class="agent-card-top"><span class="agent-mark">内容发现 / VIDEO</span><span id="video-agent-badge" class="badge neutral">读取中</span></div><h2>视频 Agent</h2><p class="agent-caption">定时浏览 · 总结分类 · 主动推荐</p><p class="agent-task" id="video-agent-task">等待读取任务</p><p id="video-agent-summary" class="agent-summary">正在读取浏览计划…</p><div class="agent-links"><a href="#videos" class="inline-route">打开视频库 <span>↗</span></a><a href="#automation" class="inline-route">浏览与推荐 →</a></div></article>
         <article class="agent-card"><div class="agent-card-top"><span class="agent-mark">消息互动 / CHAT</span><span id="chat-agent-badge" class="badge neutral">读取中</span></div><h2>聊天 Agent</h2><p class="agent-caption">私信回复 · 好友点播 · 公开评论</p><p class="agent-task" id="chat-agent-task">等待读取任务</p><p id="chat-agent-summary" class="agent-summary">正在读取消息状态…</p><div class="agent-links"><a href="#messages" class="inline-route">打开私信会话 <span>↗</span></a><a href="#friends-section" class="inline-route">管理好友 →</a></div></article>
@@ -57,9 +58,9 @@
             <div class="time-presets" role="group" aria-label="快捷选择时间"><button type="button" data-start="09:00" data-end="12:00">上午 09—12</button><button type="button" data-start="14:00" data-end="17:00">下午 14—17</button><button type="button" data-start="18:00" data-end="21:00">晚间 18—21</button></div>
             <div class="time-fields"><label>每天浏览几轮<input id="auto-rounds" type="number" min="1" max="6" value="3" required></label><label>每轮最多几个视频<input id="auto-per-round" type="number" min="1" max="5" value="5" required></label></div>
             <div class="schedule-preview"><div class="draft-top"><strong>轮次预览</strong><span>保存后生效</span></div><p id="schedule-description" class="subtle" aria-live="polite"></p><div id="schedule-slots" class="slot-list"></div></div>
-            <label>从哪里发现视频<select id="auto-source"><option value="popular_first">热门优先，不足时按兴趣搜索</option><option value="search">按兴趣搜索</option></select></label>
+            <label>从哪里发现视频<select id="auto-source"><option value="popular_first">热门优先，不足时按兴趣搜索</option><option value="home_feed_first">首页推荐优先，不足时按兴趣搜索</option><option value="search">按兴趣搜索</option></select></label>
           </fieldset>
-          <fieldset class="recommend-settings"><legend>主动推荐</legend><h3>把好内容分享给好友</h3><p class="subtle">只推荐「值得看」且符合好友兴趣的视频。</p><label class="switch"><input id="auto-proactive" type="checkbox"><span>主动推荐视频</span></label><label class="switch"><input id="auto-share" type="checkbox"><span>合适时附加视频卡片</span></label><div class="settings-note"><h3>谁会收到推荐？</h3><p class="subtle">在好友档案中管理接收对象、兴趣和推送时间。每位好友每天最多 5 个视频。</p><a href="#friends-section" class="inline-route">管理接收好友 →</a></div><details class="editor-panel"><summary>选片时长限制</summary><label>视频最长秒数<input id="auto-duration" type="number" min="30" max="3600" value="600" required></label><p class="subtle">无可用内容或超过时长时会跳过；实际数量可能少于目标。</p></details></fieldset>
+          <fieldset class="recommend-settings"><legend>主动推荐</legend><h3>把好内容分享给好友</h3><p class="subtle">刷视频时只推荐「值得看」且符合好友兴趣的视频，发送一句理由和链接。</p><label class="switch"><input id="auto-proactive" type="checkbox"><span>主动推荐视频</span></label><label class="switch"><input id="auto-share" type="checkbox"><span>好友点播时合适的话附加视频卡片</span></label><div class="settings-note"><h3>谁会收到推荐？</h3><p class="subtle">在好友档案中管理接收对象、兴趣和推送时间。每位好友每天最多 5 个视频。</p><a href="#friends-section" class="inline-route">管理接收好友 →</a></div><details class="editor-panel"><summary>选片时长限制</summary><label>视频最长秒数<input id="auto-duration" type="number" min="30" max="3600" value="600" required></label><p class="subtle">无可用内容或超过时长时会跳过；实际数量可能少于目标。</p></details></fieldset>
         </div>
         <div class="form-footer"><span class="subtle">修改后保存；后台任务使用已保存的计划。</span><button type="submit" class="primary">保存浏览计划</button></div>
       </form></div><div id="browse-history" role="tabpanel" aria-labelledby="tab-browse-history" tabindex="0" hidden><div class="section-heading spaced"><h3>执行记录</h3><span class="subtle">最近 20 条 · 按创建时间倒序 · 点击展开详情</span></div><div id="browse-jobs" class="job-history"></div></div>
@@ -72,6 +73,19 @@
       <div class="video-add-heading"><div><h3>添加视频</h3><p class="subtle">粘贴 BV 号或视频链接，将它加入总结队列。</p></div><span aria-hidden="true">▶</span></div>
       <form id="video-form" class="input-row"><label class="grow">视频 BV 号或链接<input id="video-input" placeholder="粘贴 B 站视频链接，或输入 BV 号" required></label><label class="page-input">分 P<input id="video-page" type="number" min="1" max="1000" value="1" required></label><button class="primary" type="submit">添加到队列</button></form>
       <div class="controls"><button id="resume" class="primary">开始 / 继续分析</button><button id="pause" class="secondary">暂停分析</button><span class="subtle">入队后点击开始；无字幕时可通过媒体工具获取音频并转写。</span></div>
+      </div>
+      <div class="media-workspace">
+        <div class="section-heading compact"><div><h3>音频获取与本地转写</h3><p class="subtle">从 B 站下载独立音轨；转写使用本机 ASR 模型，不上传音频给模型服务。</p></div><span class="badge neutral">本地处理</span></div>
+        <form id="media-form" class="media-form">
+          <label>视频 BV 号或链接<input id="media-bvid" required placeholder="粘贴 BV 号或视频链接"></label>
+          <label>分 P<input id="media-page" type="number" min="1" max="1000" value="1" required></label>
+          <label>获取方式<select id="media-mode"><option value="both">字幕与音频</option><option value="audio">仅音频</option><option value="auto">字幕优先，无字幕时使用音频</option></select></label>
+          <label class="check media-transcribe"><input id="media-transcribe" type="checkbox" checked>下载后在本地转写</label>
+          <button type="submit" class="primary">开始获取</button>
+        </form>
+        <p class="hint">“字幕优先”在字幕可用时不会下载音频。音频转写需要安装音频依赖并在 DSH 配置 ASR 模型目录；转写后如需生成总结，再点击上方“开始 / 继续分析”。</p>
+        <div id="media-job" class="media-job" role="status" aria-live="polite"><p class="subtle">尚无媒体任务。</p></div>
+        <button id="media-cancel" type="button" class="secondary" hidden>取消当前任务</button>
       </div>
       <details class="discovery"><summary>按主题自动找视频</summary><form id="discover-form" class="input-row"><label class="grow">感兴趣的主题<input id="keyword" placeholder="例如：Python 入门、天文科普" maxlength="100" required></label><button class="secondary" type="submit">开始发现</button></form><p class="subtle">每次最多搜索 3 轮。切换主题前先暂停分析。</p></details>
       <details class="editor-panel" open><summary>分析队列与错误</summary>
@@ -93,6 +107,7 @@
       <div class="draft-heading"><h3>最近回复</h3><span class="subtle">草稿、已发送与待确认的消息</span></div><div id="outbox" class="drafts"><p class="empty">还没有回复记录</p></div>
       <details class="dm-received"><summary>最近收到的消息 · 处理状态</summary><div id="dm-incoming" class="dm-received-list"></div></details>
       <details class="dm-log-section"><summary>私信处理日志</summary><p class="subtle">按时间倒序显示近期事件，自动更新。只显示过程与编号，不记录私信正文。</p><div id="dm-log" class="dm-log" aria-label="私信处理日志"></div></details>
+      <details class="editor-panel"><summary>查看或删除某位好友的本地私信记忆</summary><p class="hint">按 UID 选择对象。删除会清空本地私信正文、对话摘要和未发送草稿；不会删除 B 站上的消息、好友档案或推荐记录。</p><form id="dm-memory-form" class="input-row"><label class="grow">好友 UID<input id="dm-memory-peer" inputmode="numeric" pattern="[1-9][0-9]{0,29}" required placeholder="输入好友的数字 UID"></label><button type="submit" class="secondary">查看摘要</button></form><div id="dm-memory-preview" class="memory-results" role="status"></div><button id="dm-forget" type="button" class="danger-button" disabled>删除该对象的本地私信记忆</button></details>
 
     </section>
     <section id="friends-section" class="card" hidden>

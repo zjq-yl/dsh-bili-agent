@@ -283,6 +283,21 @@ class PlatformTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["candidates"][0]["title"], "学习&复习")
             self.assertEqual(search.search_by_type.call_args.kwargs["search_type"], "video")
 
+    async def test_home_feed_keeps_only_video_candidates_and_uses_account_credential(self):
+        feed = SimpleNamespace(get_videos=AsyncMock(return_value={'item': [
+            {'goto': 'live', 'bvid': 'BV0000000001', 'title': '直播'},
+            {'goto': 'av', 'bvid': 'BV0000000002', 'title': '首页知识', 'owner': {'name': 'UP', 'mid': 42}, 'duration': 120},
+            {'goto': 'av', 'bvid': 'bad', 'title': '无效'}]}))
+        with tempfile.TemporaryDirectory() as directory, patch.dict(sys.modules, {'bilibili_api': SimpleNamespace(homepage=feed)}):
+            platform = Platform(Path(directory))
+            credential = object()
+            platform.credential = lambda: credential
+            result = await platform.request('home_feed', {'limit': 20})
+            self.assertEqual(result['source'], 'bilibili_home_feed')
+            self.assertEqual(result['candidates'], [{'bvid': 'BV0000000002', 'title': '首页知识',
+                'author': 'UP', 'author_uid': '42', 'duration': 120}])
+            feed.get_videos.assert_awaited_once_with(credential=credential)
+
     def test_subtitle_cdn_url_boundary(self):
         self.assertEqual(subtitle_url("//aisubtitle.hdslb.com/a.json"), "https://aisubtitle.hdslb.com/a.json")
         for url in ["http://aisubtitle.hdslb.com/a", "https://hdslb.com.evil.test/a", "file:///secret", "https://127.0.0.1/a", "https://user:pass@aisubtitle.hdslb.com/a"]:

@@ -77,6 +77,7 @@ Object.assign(errors, { INVALID_AUTOMATION_CONFIG: '自动运行设置超出允�
 Object.assign(errors, { FRIEND_NOT_MUTUAL: '好友流程未启用或尚未确认互关，暂不发送', FRIEND_GREETING_PENDING: '消息已保留，等待招呼确认发送后继续发送', FRIEND_RELATION_BLOCKED: '存在拉黑关系，请先在 B 站核对', FOLLOW_NOT_CONFIRMED: '未确认关注成功；核对平台后可重试关注', INVALID_RELATION_RESPONSE: '平台关系数据不完整，稍后重新检查', FRIEND_CONNECTION_LIMIT: '当前最多管理 100 个关注流程', FRIEND_CONNECTION_BUSY: '正在处理关注，请稍后重试', INVALID_FRIEND_CONNECTION_ACTION: '未找到对应的好友流程', DM_CSRF_REQUIRED: '账号凭据缺少 bili_jct，暂时无法发送私信' })
 Object.assign(errors, { FRIEND_ADD_REQUIRED: '尚未互关：消息已保留，先添加好友，确认后继续发送', FRIEND_CONNECTION_PAUSED: '你已暂停该对象的流程或选择不回关，消息没有发送', CONTACT_NOT_FOLLOWER: '对方当前不是可回关的粉丝，请刷新关系', INVALID_CONTACT_PAGE: '关系分类或页码不正确' })
 Object.assign(errors, { INVALID_MENTION_RESPONSE: '平台提及通知格式不完整，等待重新读取', MENTION_NOT_FRIEND: '对方不是互关好友，或已暂停该对象的互动', MENTION_CONTEXT_MISMATCH: '评论作者或楼层无法核实，未发送', MENTION_COMMENT_UNAVAILABLE: '未找到原评论；可能已删除，或超出本次读取范围', MENTION_CONTEXT_CHANGED: '原评论内容已变化，请重试处理', INVALID_MENTION_REPLY: '生成的公开回复格式不正确，可重试处理', MENTION_VIDEO_FAILED: '视频分析失败，可检查视频任务后重试' })
+Object.assign(errors, { WAIT_FOR_SEND_TO_FINISH: '当前正在发送私信，请等待发送结束后再删除记忆。', LOCAL_ASR_MODEL_REQUIRED: '尚未配置完整的本地转写模型。请在 DSH 插件配置中设置 asrModelPath。', INSTALL_AUDIO_REQUIREMENTS: '当前 Python 环境缺少音频转写依赖，请运行 setup-local.ps1 -WithAudio。', MEDIA_BUSY: '已有媒体任务正在运行，请等待完成或取消。', AUDIO_DOWNLOAD_FAILED: '音频下载失败，请稍后重试或检查账号状态。', AUDIO_TOO_LARGE: '音频超过单次 80 MiB 的下载限制。', AUDIO_CACHE_FULL: '本地音频缓存已达到容量限制，请清理旧缓存。', AUDIO_DURATION_LIMIT: '视频时长超出音频处理限制；转写最多支持 1 小时。', ASR_FAILED: '本地音频转写失败，请检查模型文件和音频格式。', NO_SUBTITLE_ASR_DISABLED: '没有可用字幕，且未开启本地转写。', WORKER_RESTARTED: '插件重启中断了媒体任务，可以重新发起。' })
 function validationDetail(detail) {
   if (!detail) return ''
   const reasons = { invalid_json: '不是有效的 JSON', object_required: '需要 JSON 对象', string_required: '需要文本', array_required: '需要列表', length: '字符数不符合限制', count: '条数不符合限制', integer_ids_required: '证据 ID 必须是整数', unknown_ids: '引用了本轮不存在的证据 ID', invalid_reflection: '视频感受的分类、长度、评分或证据不合规' }
@@ -96,11 +97,11 @@ function badge(state) { const el = document.createElement('span'); el.className 
 function text(tag, value, className = '') { const el = document.createElement(tag); el.textContent = value; if (className) el.className = className; return el }
 function button(label, action) { const el = text('button', label, 'secondary'); el.type = 'button'; el.onclick = () => perform(el, action); return el }
 async function perform(el, action) {
-  const label = el.textContent
-  el.disabled = true; el.textContent = '处理中…'
+  const content = [...el.childNodes].map(node => node.cloneNode(true))
+  el.disabled = true; el.replaceChildren('处理中…')
   try { await action(); await refresh() }
   catch (error) { notice(error.message, true) }
-  finally { el.textContent = label; el.disabled = false; updateAutoButton() }
+  finally { el.replaceChildren(...content); el.disabled = false; updateAutoButton() }
 }
 function updateAutoButton() {
   const dm = current?.messaging
@@ -120,6 +121,7 @@ async function refresh() {
 }
 function disconnected(error) {
   liveConnected = false; current = null
+  $('hero-activity').textContent = '正在重新连接'
   $('connection').textContent = '连接中断 · 正在重连'; $('connection').className = 'badge danger'
   $('updated').textContent = '当前显示的是旧数据，连接恢复后自动更新'
   $('connection-alert').hidden = false
@@ -305,7 +307,10 @@ function renderOutbox(outbox, dm) {
     }))
     if (item.state === 'draft') {
       const send = button('发送这条草稿', async () => { const result = await call('dm.send', { draft_id: item.id }); notice(result.state === 'sent' ? '私信已发送。' : `发送状态：${names[result.state] || result.state}`, result.state !== 'sent') })
-      send.disabled = !dm.send_enabled || !dm.allowed_peers.includes(item.peer); card.append(send)
+      const previous = item.depends_on && outbox.find(row => row.id === item.depends_on)
+      send.disabled = !dm.send_enabled || !dm.allowed_peers.includes(item.peer) || Boolean(previous && previous.state !== 'sent')
+      if (previous && previous.state !== 'sent') card.append(text('p', '等待上一条消息确认发送。', 'subtle'))
+      card.append(send)
     }
     return card
   }))
@@ -331,8 +336,9 @@ function renderDmProgress(dm) {
     ? `当前不会自动回复：${explain(dm.error)}。处理原因后点击“开启自动回复”。`
     : dm.state !== 'RUNNING' ? '监听未启动。启动后才会处理新收到的消息。'
     : !dm.auto_send ? '当前只生成草稿。点击“开启自动回复”可直接切换，已接收的回复草稿会按发送范围继续处理。'
+    : dm.reply_format !== 'messages_v2' ? '当前仍在运行旧版私信 worker。请在 DSH 重载插件；若仍显示此提示，完全退出 DSH（包括托盘）后重开。'
     : dm.reply_dispatch === 'message_event'
-      ? '收到私信 → 消息事件触发回复 → 草稿事件触发发送 → B 站返回回执。接收、生成和发送独立运行；底层仍定时检查 B 站，模型和发送冷却可能需要等待。'
+      ? '收到私信 → 生成1至3条短消息 → 逐条等待 B 站回执并按间隔发送。第二条需等上一条确认送达。'
       : '当前仍运行旧版私信流程，重载插件后启用消息事件处理。'
   const incoming = dm.incoming || []
   const incomingVersion = JSON.stringify(incoming)
@@ -574,6 +580,38 @@ bind('listen-auto', async () => { await call('dm.start', { auto_send: true }); n
 bind('listen-stop', async () => { await call('dm.stop'); notice('私信监听已停止。') })
 $('close-result').onclick = () => $('result-dialog').close()
 form('video-form', async () => { const bvid = $('video-input').value.match(/BV[0-9A-Za-z]{10}/)?.[0]; if (!bvid) throw new Error('请输入有效的 BV 号或 B 站视频链接。'); const task = await call('platform.enqueue', { bvid, page: Number($('video-page').value) }); notice(`视频已入队，任务 ${task.id}。点击“开始 / 继续分析”生成总结。`) })
+let mediaJobId = sessionStorage.getItem('bili-media-job') || ''
+let mediaStatusLoading = false
+const mediaStates = { queued: '排队中', fetching: '正在获取字幕', downloading: '正在下载音频', downloaded: '音频已下载', transcribing: '正在本地转写', done: '已完成', failed: '处理失败', cancelled: '已取消', interrupted: '被插件重启中断' }
+function renderMediaJob(job) {
+  const result = job.result || {}
+  const lines = [text('strong', `媒体任务 · ${mediaStates[job.state] || job.state}`)]
+  if (result.audio) lines.push(text('p', `音频已保存：${result.audio.path}（${(result.audio.bytes / 1024 / 1024).toFixed(1)} MiB）`, 'subtle'))
+  if (result.transcript) lines.push(text('p', `转写已保存：${result.transcript.path} · ${result.transcript_segments || 0} 段`, 'subtle'))
+  if (result.summary_task) lines.push(text('p', '文字内容已加入分析队列；启动分析后可查看总结。', 'subtle'))
+  if (result.asr_note) lines.push(text('p', result.asr_note, 'subtle'))
+  if (result.subtitle_error) lines.push(text('p', `字幕：${explain(result.subtitle_error)}`, 'hint'))
+  if (job.error) lines.push(text('p', explain(job.error), 'error'))
+  $('media-job').replaceChildren(...lines)
+  $('media-cancel').hidden = !['queued', 'fetching', 'downloading', 'downloaded', 'transcribing'].includes(job.state)
+}
+async function loadMediaStatus() {
+  if (!mediaJobId || mediaStatusLoading) return
+  mediaStatusLoading = true
+  try { renderMediaJob(await call('media.status', { job_id: mediaJobId })) }
+  catch (error) { $('media-job').replaceChildren(text('p', `无法读取媒体任务：${error.message}`, 'error')); $('media-cancel').hidden = true }
+  finally { mediaStatusLoading = false }
+}
+form('media-form', async () => {
+  const bvid = $('media-bvid').value.match(/BV[0-9A-Za-z]{10}/)?.[0]
+  if (!bvid) throw new Error('请输入有效的 BV 号或 B 站视频链接。')
+  const job = await call('media.start', { bvid, page: Number($('media-page').value), mode: $('media-mode').value, transcribe: $('media-transcribe').checked })
+  mediaJobId = job.job_id; sessionStorage.setItem('bili-media-job', mediaJobId)
+  renderMediaJob({ ...job, result: {} })
+  await loadMediaStatus()
+})
+bind('media-cancel', async () => { await call('media.cancel'); await loadMediaStatus(); notice('已取消当前媒体任务。') })
+setInterval(() => { if (mediaJobId && !$('videos').hidden) void loadMediaStatus() }, 2000)
 form('discover-form', async () => { await call('agent.start', { keyword: $('keyword').value.trim() }); notice('主题发现已开始，最多进行 3 轮搜索。') })
 const keywords = id => $(id).value.split(/[,，\n]/).map(word => word.trim()).filter(Boolean)
 form('profile-form', async () => {
@@ -604,8 +642,27 @@ form('feedback-form', async () => {
   notice('反馈已保存，后续匹配会参考这条记录。')
 })
 form('memory-form', async () => { const items = await call('memory.recall', { query: $('memory-query').value.trim() }); $('memories').replaceChildren(...items.map(item => button(item.result.title || item.result.summary, () => showResult(item.video_id)))); if (!items.length) $('memories').append(text('p', '没有找到相关记忆。', 'subtle')) })
+let previewPeer = ''
+$('dm-memory-peer').addEventListener('input', () => { previewPeer = ''; $('dm-forget').disabled = true; $('dm-memory-preview').replaceChildren() })
+form('dm-memory-form', async () => {
+  const peer = $('dm-memory-peer').value.trim()
+  const memories = await call('dm.memory', { peer_uid: peer })
+  previewPeer = peer; $('dm-forget').disabled = false
+  $('dm-memory-preview').replaceChildren(text('p', memories.length ? `UID ${peer} 的最近 ${memories.length} 条本地摘要：` : `UID ${peer} 暂无本地对话摘要；仍可能存在私信正文或草稿。`, 'subtle'),
+    ...memories.map(item => text('p', item.summary || '无摘要', 'memory-entry')))
+})
+$('dm-forget').onclick = () => { void perform($('dm-forget'), async () => {
+  const peer = $('dm-memory-peer').value.trim()
+  if (!previewPeer || peer !== previewPeer) throw new Error('请先查看该 UID 的记忆，再执行删除。')
+  if (!window.confirm(`确认删除 UID ${peer} 的本地私信正文、对话摘要和未发送草稿？B 站上的消息、好友档案与推荐记录不会删除。`)) return
+  const result = await call('dm.forget', { peer_uid: peer })
+  previewPeer = ''; $('dm-forget').disabled = true
+  $('dm-memory-preview').replaceChildren(text('p', `已清除 UID ${result.forgotten_peer} 的本地私信记忆。`, 'hint'))
+  notice(`已清除 UID ${result.forgotten_peer} 的本地私信记忆。`)
+}).finally(() => { $('dm-forget').disabled = !previewPeer }) }
 async function init() {
   await refresh()
+  if (mediaJobId) void loadMediaStatus()
   if (current?.ready) try {
     const profile = await call('memory.profile')
     $('profile-name').value = profile.name; $('profile-style').value = profile.style
@@ -657,7 +714,8 @@ function renderAutomation(auto) {
     previewSchedule()
   }
   $('daily-window').textContent = `${auto.config.start_time} — ${auto.config.end_time}`
-  $('daily-detail').textContent = auto.config.scheduled ? `${auto.config.discovery_source === 'popular_first' ? '热门优先' : '兴趣搜索'} · ${auto.config.rounds} 轮 · 每轮最多 ${auto.config.per_round} 个视频` : '定时浏览已关闭'
+  const sourceName = { popular_first: '热门优先', home_feed_first: '首页推荐优先', search: '兴趣搜索' }
+  $('daily-detail').textContent = auto.config.scheduled ? `${sourceName[auto.config.discovery_source] || '兴趣搜索'} · ${auto.config.rounds} 轮 · 每轮最多 ${auto.config.per_round} 个视频` : '定时浏览已关闭'
   const slotsVersion = JSON.stringify(auto.slots)
   if ($('daily-slots').dataset.version !== slotsVersion) {
     $('daily-slots').dataset.version = slotsVersion
@@ -680,7 +738,7 @@ function renderAutomation(auto) {
     const date = job.created ? new Date(job.created * 1000) : null
     const time = text('time', date ? date.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '时间未记录', 'job-time')
     if (date) time.dateTime = date.toISOString()
-    const title = job.kind === 'scheduled' && job.requirements?.discovery_source === 'popular_first' ? `热门优先 · ${job.keyword}` : job.keyword
+    const title = job.kind === 'scheduled' && job.requirements?.discovery_source !== 'search' ? `${sourceName[job.requirements?.discovery_source] || '定时浏览'} · ${job.keyword}` : job.keyword
     const label = text('span', '', 'job-label'); label.append(text('strong', title || '未设置主题'), text('small', `#${job.id} · ${job.kind === 'request' ? `好友请求 · UID ${job.peer}` : '定时浏览'}`)); label.title = title || ''
     const state = badge(states[job.state] || job.state); state.classList.add('job-state')
     const arrow = text('span', '›', 'job-chevron'); arrow.setAttribute('aria-hidden', 'true')
@@ -757,9 +815,11 @@ bind('load-folders', async () => {
 navigate(pages[fragment] ? fragment : 'overview')
 
 Object.assign(errors, { VIDEO_NOT_READY_FOR_REANALYSIS: '视频正在处理中，请完成或暂停后再查看状态', VIDEO_PART_CHANGED: '分P信息已变化，请重新添加正确的视频链接', RECOMMENDATION_CARD_EXPIRED: '附加卡片已跨天，未继续发送', DM_SEND_INTERVAL: '等待私信发送冷却', DM_DAILY_LIMIT: '旧版本的聊天日上限已取消，请重载插件', VIDEO_PAUSED: '视频处理已暂停，点击开始 / 继续分析恢复', RECIPIENT_NOT_ENABLED: '接收者不在允许发送范围', DM_SEND_UNCERTAIN: '发送结果待确认，请到 B 站核对；不会自动重复发送', VIDEO_EXCEEDS_AUTOMATION_DURATION: '超过自动选片时长上限', NO_SUBTITLE_URL: '没有可用字幕地址', INVALID_RECOMMENDATION_SELECTION: '推荐选择输出不合规，任务保留等待处理' })
+Object.assign(errors, { PREVIOUS_MESSAGE_NOT_SENT: '请先发送并确认上一条消息。', PREVIOUS_MESSAGE_UNCERTAIN: '上一条发送结果待核对，后续短句已取消。', PROACTIVE_LINK_ONLY: '主动推荐已改为简短文字和视频链接，旧卡片草稿已取消。' })
 function renderLive(data) {
   const agents = data.agents || {}
   const config = data.automation?.config || {}, messaging = data.messaging
+  renderOverviewSnapshot(data)
   const videoState = agents.video?.state === 'RUNNING' ? '运行中' : (names[agents.video?.state] || '等待读取')
   const chatState = messaging.state === 'RUNNING' ? (messaging.auto_send ? '自动回复中' : '草稿模式') : (names[messaging.state] || '等待读取')
   $('video-agent-badge').textContent = videoState
@@ -866,5 +926,22 @@ function renderLive(data) {
     card.append(button('查看完整处理过程', async () => { navigate('automation'); selectPanel('browse-history') }))
       return card
     }))
+  }
+}
+
+/** Keep the small overview counters in sync with the worker snapshot. */
+function renderOverviewSnapshot(data) {
+  const queue = data.agent?.queue || []
+  const videoActive = data.agents?.video?.state === 'RUNNING'
+  const chatActive = data.messaging?.state === 'RUNNING'
+  $('hero-activity').textContent = videoActive ? '视频 Agent 工作中' : chatActive ? '私信监听中' : '等待下一次探索'
+  const values = {
+    'pulse-videos': queue.length,
+    'pulse-complete': queue.filter(item => item.state === 'done').length,
+    'pulse-events': (data.events || []).length,
+  }
+  for (const [id, value] of Object.entries(values)) {
+    const node = $(id)
+    if (node.textContent !== String(value)) node.textContent = String(value)
   }
 }
